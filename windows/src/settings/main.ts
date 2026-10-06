@@ -43,23 +43,35 @@ function renderDiff(text: string): HTMLElement {
 
 // ── Claude Code section ───────────────────────────────────────────────────────
 
-function claudeSection(status: HookStatus): HTMLElement {
+interface HookSectionOptions {
+  title: string;
+  configName: string;
+  status: () => Promise<HookStatus | null>;
+  preview: (install: boolean) => ReturnType<typeof Bridge.hooksPreview>;
+  apply: (install: boolean, fingerprint: string) => ReturnType<typeof Bridge.hooksApply>;
+  installedText: string;
+  missingText: string;
+  sessionName: string;
+  afterInstall?: string;
+}
+
+function hookSection(status: HookStatus, options: HookSectionOptions): HTMLElement {
   const body = h("div", { style: "display:flex;flex-direction:column;gap:12px" });
   const section = h(
     "section",
     {},
-    h("h2", {}, statusDot(status.installed), h("span", { text: "Claude Code" })),
+    h("h2", {}, statusDot(status.installed), h("span", { text: options.title })),
     body,
   );
 
   const rebuild = async () => {
-    const fresh = await Bridge.hooksStatus();
+    const fresh = await options.status();
     if (fresh) Object.assign(status, fresh);
     clear(body);
     draw();
     const head = section.querySelector("h2")!;
     clear(head);
-    head.append(statusDot(status.installed), h("span", { text: "Claude Code" }));
+    head.append(statusDot(status.installed), h("span", { text: options.title }));
   };
 
   function draw() {
@@ -67,11 +79,11 @@ function claudeSection(status: HookStatus): HTMLElement {
       h("div", {
         class: "hint",
         text: status.installed
-          ? "Coucou is hooked into your Claude Code sessions. Tool calls, questions and permission requests show up in the island, and you can answer them there."
-          : "Install the hooks to see your Claude Code sessions in the island and approve permissions without leaving what you are doing.",
+          ? options.installedText
+          : options.missingText,
       }),
       h("div", { class: "row" },
-        h("label", { text: "settings.json" }),
+        h("label", { text: options.configName }),
         h("span", { class: "path", text: status.settingsPath }),
       ),
       h("div", { class: "row" },
@@ -114,7 +126,7 @@ function claudeSection(status: HookStatus): HTMLElement {
   async function showPreview(install: boolean) {
     let preview;
     try {
-      preview = await Bridge.hooksPreview(install);
+      preview = await options.preview(install);
     } catch (err) {
       // An unreadable or invalid settings.json stops here rather than being
       // treated as empty and written over.
@@ -134,7 +146,7 @@ function claudeSection(status: HookStatus): HTMLElement {
       h("div", {
         class: "hint",
         text: install
-          ? "This is exactly what will change in your settings.json. Your own hooks are left untouched."
+          ? `This is exactly what will change in your ${options.configName}. Your own hooks are left untouched.`
           : "This removes Coucou's entries only. Your own hooks are left untouched.",
       }),
       renderDiff(preview.diff),
@@ -149,11 +161,11 @@ function claudeSection(status: HookStatus): HTMLElement {
     confirm.addEventListener("click", async () => {
       confirm.disabled = true;
       try {
-        const backup = await Bridge.hooksApply(install, preview.fingerprint);
+        const backup = await options.apply(install, preview.fingerprint);
         clear(body);
         body.append(h("div", {
           class: "notice ok",
-          text: `Done. Previous settings saved as ${backup}. Open a new Claude Code session to pick the hooks up.`,
+          text: `Done. Previous settings saved as ${backup}. ${options.afterInstall ?? `Open a new ${options.sessionName} session to pick the hooks up.`}`,
         }));
         window.setTimeout(() => void rebuild(), 2600);
       } catch (err) {
@@ -171,6 +183,33 @@ function claudeSection(status: HookStatus): HTMLElement {
   return section;
 }
 
+function claudeSection(status: HookStatus): HTMLElement {
+  return hookSection(status, {
+    title: "Claude Code",
+    configName: "settings.json",
+    status: Bridge.hooksStatus,
+    preview: Bridge.hooksPreview,
+    apply: Bridge.hooksApply,
+    installedText: "Coucou is hooked into your Claude Code sessions. Tool calls, questions and permission requests show up in the island, and you can answer them there.",
+    missingText: "Install the hooks to see your Claude Code sessions in the island and approve permissions without leaving what you are doing.",
+    sessionName: "Claude Code",
+  });
+}
+
+function codexSection(status: HookStatus): HTMLElement {
+  return hookSection(status, {
+    title: "Codex in VS Code",
+    configName: "hooks.json",
+    status: Bridge.codexHooksStatus,
+    preview: Bridge.codexHooksPreview,
+    apply: Bridge.codexHooksApply,
+    installedText: "Coucou is hooked into Codex. Tool calls, completed turns and permission requests appear in the island.",
+    missingText: "Install Codex hooks to follow the OpenAI Codex extension in VS Code and answer its permission requests from the island.",
+    sessionName: "Codex",
+    afterInstall: "Restart VS Code, then review and trust the Coucou hooks from Codex's Hooks settings.",
+  });
+}
+
 // ── Claude API section ────────────────────────────────────────────────────────
 
 const MODELS: [string, string][] = [
@@ -179,7 +218,7 @@ const MODELS: [string, string][] = [
   ["claude-haiku-4-5", "Claude Haiku 4.5"],
 ];
 
-function apiSection(hasKey: boolean): HTMLElement {
+function claudeApiSection(hasKey: boolean): HTMLElement {
   const dot = statusDot(hasKey);
   const state = h("span", { class: "hint", text: hasKey ? "Key saved in the Windows Credential Manager." : "No key yet — the chat needs one." });
 
@@ -256,15 +295,125 @@ function apiSection(hasKey: boolean): HTMLElement {
 
 // ── Integrations section ──────────────────────────────────────────────────────
 
+const OPENAI_MODELS: [string, string][] = [
+  ["gpt-6-astra", "GPT-6 Astra"],
+  ["gpt-6.1-sol", "GPT-6.1 Sol"],
+  ["gpt-6-luna", "GPT-6 Luna"],
+];
+
+function chatProviderSection(): HTMLElement {
+  const provider = h("select", {}) as HTMLSelectElement;
+  provider.append(
+    h("option", { value: "claude", text: "Claude (Anthropic)" }),
+    h("option", { value: "openai", text: "OpenAI" }),
+  );
+  provider.value = settings.chatProvider;
+  provider.addEventListener("change", () => {
+    settings.chatProvider = provider.value as Settings["chatProvider"];
+    void save();
+  });
+  return h(
+    "section",
+    {},
+    h("h2", {}, h("span", { text: "Chat provider" })),
+    h("div", {
+      class: "hint",
+      text: "Choose which API answers messages in the island. Changing provider starts a new conversation.",
+    }),
+    h("div", { class: "row" }, h("label", { text: "Provider" }), provider),
+  );
+}
+
+function openAiApiSection(hasKey: boolean): HTMLElement {
+  const dot = statusDot(hasKey);
+  const state = h("span", {
+    class: "hint",
+    text: hasKey
+      ? "Key saved in the Windows Credential Manager."
+      : "No key yet — OpenAI chat needs one.",
+  });
+  const field = h("input", {
+    type: "password",
+    placeholder: hasKey ? "••••••••••••  (stored)" : "sk-...",
+    style: "flex:1 1 auto;min-width:0",
+    autocomplete: "off",
+    spellcheck: "false",
+  }) as HTMLInputElement;
+  const saveBtn = h("button", { class: "primary", text: "Save key" });
+  const clearBtn = h("button", { class: "danger", text: "Remove" });
+  const feedback = h("div", {});
+
+  async function refresh() {
+    const present = (await Bridge.secretPresent("openai-api-key")) ?? false;
+    dot.style.background = present ? "#22c55e" : "#f4505e";
+    state.textContent = present
+      ? "Key saved in the Windows Credential Manager."
+      : "No key yet — OpenAI chat needs one.";
+    field.placeholder = present ? "••••••••••••  (stored)" : "sk-...";
+    clearBtn.style.display = present ? "" : "none";
+  }
+
+  saveBtn.addEventListener("click", async () => {
+    const value = field.value.trim();
+    if (!value) return;
+    clear(feedback);
+    try {
+      await Bridge.secretSet("openai-api-key", value);
+      field.value = "";
+      feedback.append(h("div", { class: "notice ok", text: "Saved securely." }));
+      await refresh();
+    } catch (err) {
+      feedback.append(h("div", { class: "notice err", text: `Could not save: ${String(err)}` }));
+    }
+  });
+  clearBtn.addEventListener("click", async () => {
+    clear(feedback);
+    try {
+      await Bridge.secretClear("openai-api-key");
+      feedback.append(h("div", { class: "notice ok", text: "Key removed." }));
+      await refresh();
+    } catch (err) {
+      feedback.append(h("div", { class: "notice err", text: `Could not remove: ${String(err)}` }));
+    }
+  });
+
+  const model = h("select", {}) as HTMLSelectElement;
+  for (const [id, label] of OPENAI_MODELS) model.append(h("option", { value: id, text: label }));
+  if (!OPENAI_MODELS.some(([id]) => id === settings.openaiModel)) {
+    model.append(h("option", { value: settings.openaiModel, text: settings.openaiModel }));
+  }
+  model.value = settings.openaiModel;
+  model.addEventListener("change", () => {
+    settings.openaiModel = model.value;
+    void save();
+  });
+  clearBtn.style.display = hasKey ? "" : "none";
+
+  return h(
+    "section",
+    {},
+    h("h2", {}, dot, h("span", { text: "OpenAI API" })),
+    state,
+    h("div", { class: "row" }, h("label", { text: "API key" }), field, saveBtn, clearBtn),
+    h("div", { class: "row" }, h("label", { text: "Model" }), model),
+    feedback,
+  );
+}
+
 interface IntegrationDef {
   id: string;
   name: string;
   color: string;
+  description?: string;
   /** Credential Manager keys, in the order they are shown. */
   fields: { key: string; label: string; placeholder: string; secret: boolean }[];
 }
 
 const INTEGRATIONS: IntegrationDef[] = [
+  { id: "integration_claude", name: "Claude Code", color: "#F5F6F8",
+    description: "Show Claude Code sessions and approval requests from VS Code.", fields: [] },
+  { id: "integration_codex", name: "Codex", color: "#C96AF2",
+    description: "Show Codex sessions and approval requests from VS Code.", fields: [] },
   { id: "integration_stripe", name: "Stripe", color: "#0570DE",
     fields: [{ key: "stripe-api-key", label: "Secret key", placeholder: "sk_live_…", secret: true }] },
   { id: "integration_github", name: "GitHub", color: "#F4505E",
@@ -284,7 +433,7 @@ const INTEGRATIONS: IntegrationDef[] = [
     fields: [{ key: "calcom-api-key", label: "API key", placeholder: "cal_…", secret: true }] },
 ];
 
-const MAX_ACTIVE = 4;
+const MAX_ACTIVE = 6;
 
 function integrationsSection(present: Record<string, boolean>): HTMLElement {
   const note = h("div", { class: "hint" });
@@ -292,7 +441,7 @@ function integrationsSection(present: Record<string, boolean>): HTMLElement {
 
   function updateNote() {
     const used = settings.activeIntegrations.length;
-    note.textContent = `Pick up to ${MAX_ACTIVE} pills to show next to Mochi — ${used}/${MAX_ACTIVE} in use. Keys are stored in the Windows Credential Manager, never on disk.`;
+    note.textContent = `Pick up to ${MAX_ACTIVE} integrations to show next to Mochi — ${used}/${MAX_ACTIVE} in use. Keys are stored in the Windows Credential Manager, never on disk.`;
   }
 
   for (const def of INTEGRATIONS) {
@@ -312,6 +461,9 @@ function integrationsSection(present: Record<string, boolean>): HTMLElement {
     });
 
     const rows = h("div", { style: "display:flex;flex-direction:column;gap:6px;flex:1 1 auto;min-width:0" });
+    if (def.description) {
+      rows.append(h("div", { class: "hint", text: def.description }));
+    }
     for (const field of def.fields) {
       const input = h("input", {
         type: field.secret ? "password" : "text",
@@ -428,8 +580,12 @@ async function main() {
   const status = (await Bridge.hooksStatus()) ?? {
     installed: false, settingsPath: "", hookPath: "", hookReady: false,
   };
+  const codexStatus = (await Bridge.codexHooksStatus()) ?? {
+    installed: false, settingsPath: "", hookPath: "", hookReady: false,
+  };
 
-  const hasKey = (await Bridge.secretPresent("anthropic-api-key")) ?? false;
+  const hasClaudeKey = (await Bridge.secretPresent("anthropic-api-key")) ?? false;
+  const hasOpenAiKey = (await Bridge.secretPresent("openai-api-key")) ?? false;
 
   const keys = [
     "stripe-api-key", "github-token", "vercel-token",
@@ -442,7 +598,10 @@ async function main() {
   root.append(
     h("h1", {}, h("span", { text: "Coucou" }), h("span", { class: "version", text: version })),
     claudeSection(status),
-    apiSection(hasKey),
+    codexSection(codexStatus),
+    chatProviderSection(),
+    claudeApiSection(hasClaudeKey),
+    openAiApiSection(hasOpenAiKey),
     integrationsSection(present),
     generalSection(),
     h("div", {

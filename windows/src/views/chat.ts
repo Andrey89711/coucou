@@ -53,7 +53,7 @@ export function buildPrompt(onHeightChange: () => void): ViewHost {
     { class: "view" },
     h("div", { class: "card wash chat-card" }, h("div", { class: "chat-body" }, chipRow, log, bar)),
   );
-  (el.querySelector(".card") as HTMLElement).style.setProperty("--wash", "rgba(99,102,241,0.5)");
+  const card = el.querySelector(".card") as HTMLElement;
 
   let sending = false;
   let renderedCount = -1;
@@ -104,8 +104,14 @@ export function buildPrompt(onHeightChange: () => void): ViewHost {
   return {
     el,
     sync() {
+      const provider = State.settings.chatProvider;
+      const providerLabel = provider === "openai" ? "OpenAI" : "Claude";
+      card.style.setProperty(
+        "--wash",
+        provider === "openai" ? "rgba(16,163,127,0.46)" : "rgba(99,102,241,0.5)",
+      );
       const file = State.droppedFile;
-      const wantChip = file?.name ?? "";
+      const wantChip = [providerLabel, file?.name].filter(Boolean).join(" · ");
       if (chipRow.dataset.label !== wantChip) {
         chipRow.dataset.label = wantChip;
         clear(chipRow);
@@ -122,7 +128,9 @@ export function buildPrompt(onHeightChange: () => void): ViewHost {
         log.scrollTop = log.scrollHeight;
       }
 
-      input.placeholder = State.chatHistory.length === 0 ? "Ask me anything…" : "Continue…";
+      input.placeholder = State.chatHistory.length === 0
+        ? `Ask ${providerLabel} anything…`
+        : "Continue…";
       input.disabled = sending;
     },
     focus() {

@@ -113,7 +113,7 @@ export class Island {
       },
       openTerminal: () => {
         const cwd = State.focusTask?.sessionCwd ?? null;
-        void Bridge.openInVSCode(cwd);
+        void Bridge.openTerminal(cwd);
       },
       // The ↗ button — same targets as openAgentTarget() on macOS.
       openTarget: () => {
@@ -127,7 +127,9 @@ export class Island {
           integration_notion: "https://notion.so",
           integration_calcom: "https://app.cal.com/bookings",
         };
-        if (task.id === "integration_claude") void Bridge.openInVSCode(task.sessionCwd ?? null);
+        if (task.id === "integration_claude" || task.id === "integration_codex") {
+          void Bridge.openInVSCode(task.sessionCwd ?? null);
+        }
         else if (task.id === "integration_n8n") void Bridge.openN8n();
         else if (urls[task.id]) void Bridge.openUrl(urls[task.id]);
       },
@@ -143,8 +145,8 @@ export class Island {
         State.pendingApproval = null;
         State.isPinned = false;
         this.fsm.pinned = false;
-        State.updateTask("integration_claude", "working");
-        State.setPillBadge("integration_claude", null);
+        State.updateTask(req.pillId, "working");
+        State.setPillBadge(req.pillId, null);
         this.setView(State.defaultView());
       },
       toggleSound: () => {
@@ -164,6 +166,10 @@ export class Island {
         this.fsm.homeToPetitDelay = s;
         void Bridge.saveSettings(State.settings);
         State.notify();
+      },
+      toggleIntegration: (id) => {
+        State.toggleIntegration(id);
+        void Bridge.saveSettings(State.settings);
       },
       openSettingsWindow: () => void Bridge.openSettingsWindow(),
       blip: () => Sound.play("blip"),

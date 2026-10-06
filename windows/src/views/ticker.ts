@@ -12,7 +12,7 @@ import { ICONS } from "./icons";
 import { cubicBezier, clamp, lerp } from "../core/anim";
 import type { AgentTask } from "../core/state";
 
-const ROW_H = 22;
+const ROW_H = 24;
 /** One step transition, milliseconds. */
 const DURATION = 380;
 /** Beyond this many queued steps we stop trying to show them all. */
@@ -44,7 +44,7 @@ function makeRow(): Row {
     "div",
     { class: "ticker-row" },
     h("span", { class: "tick-icon", style: "position:relative" }, chevron, check),
-    h("span", { style: "position:relative;flex:1 1 auto;min-width:0" }, shimmer, dim),
+    h("span", { class: "tick-copy" }, shimmer, dim),
   );
   return { el, chevron, check, shimmer, dim, text: "" };
 }

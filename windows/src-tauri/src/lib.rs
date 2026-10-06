@@ -6,6 +6,7 @@ mod hooks;
 mod integrations;
 mod island;
 mod log;
+mod openai;
 mod pipe;
 mod platform;
 mod secrets;
@@ -21,6 +22,7 @@ use tauri::{AppHandle, Emitter, Manager, State, WebviewUrl, WebviewWindowBuilder
 use tauri_plugin_autostart::{ManagerExt, MacosLauncher};
 
 use claude::{Chat, ChatContext, ChatReply};
+use openai::OpenAiChat;
 use files::DroppedFile;
 use hooks::{HookPreview, HookStatus};
 use island::{PollGate, ScreenInfo};
@@ -165,6 +167,19 @@ fn open_in_vscode(path: Option<String>) -> bool {
     false
 }
 
+/// Opens an actual terminal in the active agent's working directory.
+#[tauri::command]
+fn open_terminal(path: Option<String>) -> bool {
+    let Some(path) = path.filter(|value| !value.is_empty()) else {
+        return false;
+    };
+    let path = std::path::Path::new(&path);
+    if !(path.is_absolute() && path.is_dir()) {
+        return false;
+    }
+    platform::open_terminal(path)
+}
+
 #[tauri::command]
 fn quit_app(app: AppHandle) {
     app.exit(0);
@@ -212,6 +227,21 @@ fn hooks_apply(
 }
 
 #[tauri::command]
+fn codex_hooks_status() -> HookStatus {
+    hooks::codex_status()
+}
+
+#[tauri::command]
+fn codex_hooks_preview(install: bool) -> Result<HookPreview, String> {
+    hooks::codex_preview(install)
+}
+
+#[tauri::command]
+fn codex_hooks_apply(install: bool, fingerprint: String) -> Result<String, String> {
+    hooks::codex_write(install, &fingerprint)
+}
+
+#[tauri::command]
 fn approval_decision(app: AppHandle, request_id: String, decision: String) {
     pipe::answer(&app, &request_id, &decision);
 }
@@ -238,16 +268,28 @@ fn approval_decline(app: AppHandle, request_id: String) {
 async fn chat_send(
     shared: State<'_, Shared>,
     chat: State<'_, Chat>,
+    openai_chat: State<'_, OpenAiChat>,
     query: String,
     context: Option<ChatContext>,
 ) -> Result<ChatReply, String> {
-    let model = shared.settings.lock().unwrap().model.clone();
-    claude::send(&chat, &model, query, context).await
+    let (provider, claude_model, openai_model) = {
+        let settings = shared.settings.lock().unwrap();
+        (
+            settings.chat_provider.clone(),
+            settings.model.clone(),
+            settings.openai_model.clone(),
+        )
+    };
+    match provider.as_str() {
+        "openai" => openai::send(&openai_chat, &openai_model, query, context).await,
+        _ => claude::send(&chat, &claude_model, query, context).await,
+    }
 }
 
 #[tauri::command]
-fn chat_reset(chat: State<Chat>) {
+fn chat_reset(chat: State<Chat>, openai_chat: State<OpenAiChat>) {
     chat.reset();
+    openai_chat.reset();
 }
 
 /// Copies a dropped file into the inbox and reports its name back.
@@ -374,6 +416,7 @@ pub fn run() {
         })
         .manage(Pending::default())
         .manage(Chat::default())
+        .manage(OpenAiChat::default())
         .invoke_handler(tauri::generate_handler![
             boot,
             save_settings,
@@ -383,10 +426,14 @@ pub fn run() {
             reposition,
             open_url,
             open_in_vscode,
+            open_terminal,
             quit_app,
             hooks_status,
             hooks_preview,
             hooks_apply,
+            codex_hooks_status,
+            codex_hooks_preview,
+            codex_hooks_apply,
             approval_decision,
             approval_ack,
             approval_decline,

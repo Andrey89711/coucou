@@ -3,7 +3,7 @@
 import type { BotEmoteName, BotStateName, IslandMode, IslandViewName } from "./layout";
 import type { EyeShape } from "../mochi/engine";
 
-export type AgentSource = "claudeCode" | "n8n" | "agent";
+export type AgentSource = "claudeCode" | "codex" | "n8n" | "agent";
 export type PillBadge = "approval" | "finished" | "error";
 
 export interface AgentTask {
@@ -24,6 +24,7 @@ export interface AgentTask {
 export interface ApprovalInfo {
   requestId: string;
   sessionId: string;
+  pillId: string;
   tool: string;
   command: string;
 }
@@ -58,7 +59,8 @@ const task = (
 
 /** AgentTask.integrationAgents — same ids, names and colours as macOS. */
 export const INTEGRATION_AGENTS: AgentTask[] = [
-  task("integration_claude", "VS Code", "#F5F6F8", "claudeCode"),
+  task("integration_claude", "Claude Code", "#F5F6F8", "claudeCode"),
+  task("integration_codex", "Codex", "#C96AF2", "codex"),
   task("integration_resend", "Resend", "#22C55E", "n8n"),
   task("integration_n8n", "n8n", "#F29B38", "n8n"),
   task("integration_vercel", "Vercel", "#7C5CFF", "n8n"),
@@ -87,11 +89,16 @@ export interface Settings {
   autoCloseInterval: number;
   absenceInterval: number;
   activeIntegrations: string[];
+  integrationsVersion: number;
   screen: "primary" | "cursor";
   autostart: boolean;
   hooksInstalled: boolean;
   /** Claude model used by the chat. */
   model: string;
+  /** API used by the island chat. */
+  chatProvider: "claude" | "openai";
+  /** OpenAI model used by the chat. */
+  openaiModel: string;
 }
 
 export const DEFAULT_SETTINGS: Settings = {
@@ -100,12 +107,16 @@ export const DEFAULT_SETTINGS: Settings = {
   autoCloseInterval: 15,
   absenceInterval: 180,
   activeIntegrations: [
+    "integration_claude", "integration_codex",
     "integration_resend", "integration_n8n", "integration_vercel", "integration_github",
   ],
+  integrationsVersion: 1,
   screen: "primary",
   autostart: false,
   hooksInstalled: false,
   model: "claude-opus-5",
+  chatProvider: "claude",
+  openaiModel: "gpt-6.1-sol",
 };
 
 type Listener = () => void;
@@ -199,24 +210,24 @@ class AppState {
     this.notify();
   }
 
-  /** loadIntegrationTasks() — VS Code always on, the rest opt-in (max 4). */
+  /** Loads only integrations enabled in settings. */
   loadIntegrationTasks() {
     for (const proto of INTEGRATION_AGENTS) {
-      const shouldLoad =
-        proto.id === "integration_claude" || this.settings.activeIntegrations.includes(proto.id);
+      const shouldLoad = this.settings.activeIntegrations.includes(proto.id);
       const idx = this.tasks.findIndex((t) => t.id === proto.id);
       if (shouldLoad && idx < 0) this.tasks.push({ ...proto, steps: [] });
       if (!shouldLoad && idx >= 0) this.tasks.splice(idx, 1);
     }
-    // Order: integration_claude first, then agent_* pills (visible in slice(0,4)),
-    // then other integrations in declaration order.
+    // Known integrations follow declaration order; ad-hoc agents sit after the
+    // two editor agents and before service integrations.
     const order = INTEGRATION_AGENTS.map((t) => t.id);
     this.tasks.sort((a, b) => {
       const isAgentA = a.id.startsWith("agent_");
       const isAgentB = b.id.startsWith("agent_");
-      // integration_claude always first
       if (a.id === "integration_claude") return -1;
       if (b.id === "integration_claude") return 1;
+      if (a.id === "integration_codex") return -1;
+      if (b.id === "integration_codex") return 1;
       // agent_* before other integrations; preserve insertion order among themselves
       if (isAgentA && !isAgentB) return -1;
       if (isAgentB && !isAgentA) return 1;
@@ -224,7 +235,9 @@ class AppState {
       // both known integrations → declaration order
       return order.indexOf(a.id) - order.indexOf(b.id);
     });
-    if (!this.focusId) this.focusId = "integration_claude";
+    if (!this.focusId || !this.tasks.some((t) => t.id === this.focusId)) {
+      this.focusId = this.tasks[0]?.id ?? null;
+    }
     this.notify();
   }
 
@@ -232,15 +245,16 @@ class AppState {
     const idx = this.tasks.findIndex((t) => t.id === id);
     if (idx < 0) return;
     this.tasks.splice(idx, 1);
-    if (this.focusId === id) this.focusId = this.tasks[0]?.id ?? "integration_claude";
+    if (this.focusId === id) this.focusId = this.tasks[0]?.id ?? null;
     this.notify();
   }
 
-  /** Creates a dynamic agent_ pill on first event; no-ops if it already exists.
-   *  Inserted right after integration_claude so it appears in the visible slice(0,4). */
+  /** Creates a dynamic agent_ pill on first event; no-ops if it already exists. */
   upsertExternalAgent(id: string, name: string, color: string) {
     if (this.tasks.some((t) => t.id === id)) return;
-    const at = this.tasks.findIndex((t) => t.id === "integration_claude") + 1;
+    const codex = this.tasks.findIndex((t) => t.id === "integration_codex");
+    const claude = this.tasks.findIndex((t) => t.id === "integration_claude");
+    const at = Math.max(codex, claude) + 1;
     this.tasks.splice(at, 0, {
       id, name, color,
       state: "idle", stepIndex: 0, steps: [],
@@ -251,13 +265,11 @@ class AppState {
   }
 
   toggleIntegration(id: string) {
-    if (id === "integration_claude") return;
     const active = this.settings.activeIntegrations;
     if (active.includes(id)) {
       this.settings.activeIntegrations = active.filter((x) => x !== id);
-      if (this.focusId === id) this.focusId = "integration_claude";
     } else {
-      if (active.length >= 4) return;
+      if (active.length >= 6) return;
       this.settings.activeIntegrations = [...active, id];
     }
     this.loadIntegrationTasks();

@@ -6,7 +6,7 @@
 
 **Mochi doesn't get a notch on a PC — so it lives at the top of your screen instead.**
 
-Approve Claude Code permissions, watch your session work, drop a file, chat with Claude, keep an eye on your services — without leaving what you're doing.
+Approve Claude Code or Codex permissions, watch your sessions work, drop a file, chat with Claude, and keep an eye on your services without leaving what you're doing.
 
 ![Windows 10/11](https://img.shields.io/badge/Windows-10%2F11-0078D4?logo=windows)
 ![Tauri 2](https://img.shields.io/badge/Tauri-2-FFC131?logo=tauri&logoColor=black)
@@ -51,6 +51,10 @@ Everything else happens on its own: a Claude Code permission request opens the
 island with **Deny / Allow**, a finished session shows what it did, and
 your integrations sit in the coloured pills next to Mochi.
 
+Claude Code and Codex are separate entries under **Settings → Integrations**.
+Each can be shown or hidden like the service integrations; disabling one keeps
+its installed hooks intact but sends permission prompts back to VS Code.
+
 ## Claude Code
 
 <img src="screenshots/settings.png" width="562" alt="The settings window">
@@ -67,6 +71,19 @@ never blocked or slowed down by Coucou.** If nobody answers a permission request
 in time, Coucou stays quiet and Claude Code asks in the terminal as usual.
 
 It works from any terminal — Windows Terminal, PowerShell, VS Code, Git Bash.
+
+## Codex in VS Code
+
+The OpenAI Codex extension uses the same Codex configuration as the desktop app
+and CLI. Open **Settings… → Codex in VS Code → Install hooks…** to preview and
+write Coucou's entries to `%USERPROFILE%\.codex\hooks.json`. Existing hooks stay
+in place, and Coucou takes a dated backup before writing.
+
+Restart VS Code after installing, then open Codex's Hooks settings and trust the
+new Coucou hooks. Codex sessions get their own pill in the island. Tool calls,
+completed turns and permission requests appear there; **Allow** and **Deny** are
+sent back to the exact request that is waiting. If Coucou is unavailable or does
+not answer in time, Codex keeps its normal approval prompt.
 
 ## Chat and keys
 

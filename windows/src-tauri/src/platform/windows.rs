@@ -85,6 +85,23 @@ pub fn reveal_folder(path: &str) {
     let _ = Command::new("explorer").arg(path).spawn();
 }
 
+/// Opens a visible interactive terminal with `path` as its working directory.
+/// Arguments and the working directory are passed directly, never through a
+/// shell command string, so paths containing shell metacharacters stay paths.
+pub fn open_terminal(path: &std::path::Path) -> bool {
+    if let Some(wt) = find_on_path("wt") {
+        if Command::new(wt).args(["-d"]).arg(path).spawn().is_ok() {
+            return true;
+        }
+    }
+
+    Command::new("powershell.exe")
+        .arg("-NoExit")
+        .current_dir(path)
+        .spawn()
+        .is_ok()
+}
+
 /// Our own `where`: walks %PATH% against %PATHEXT%, no shell involved.
 /// Rust quotes arguments correctly for `.cmd`/`.bat` targets since 1.77, so
 /// spawning `code.cmd` directly is safe.

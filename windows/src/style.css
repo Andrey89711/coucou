@@ -404,10 +404,12 @@ body {
 
 .who {
   padding: 0 36px 0 108px;
+  height: 18px;
   display: flex;
   align-items: center;
   gap: 6px;
   min-width: 0;
+  overflow: hidden;
 }
 
 .who .name {
@@ -442,8 +444,8 @@ body {
 
 .ticker {
   position: relative;
-  height: 44px;
-  margin: 6px 12px 0 108px;
+  height: 48px;
+  margin: 4px 12px 0 108px;
   overflow: hidden;
   -webkit-mask-image: linear-gradient(
     to bottom,
@@ -459,12 +461,13 @@ body {
   position: absolute;
   left: 0;
   right: 0;
-  height: 22px;
+  height: 24px;
   display: flex;
   align-items: center;
   gap: 6px;
   transform-origin: left center;
   will-change: transform, opacity;
+  overflow: hidden;
 }
 
 .ticker-row .tick-icon {
@@ -475,8 +478,20 @@ body {
   color: var(--dim-2);
 }
 
+.ticker-row .tick-copy {
+  position: relative;
+  flex: 1 1 auto;
+  min-width: 0;
+  height: 24px;
+  overflow: hidden;
+}
+
 .ticker-row .tick-text {
+  position: absolute;
+  inset: 0;
+  display: block;
   font: 500 13px var(--font);
+  line-height: 24px;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -732,6 +747,33 @@ input[type="range"]::-webkit-slider-thumb {
 .seg button.on {
   background: #252830;
   color: var(--ink);
+}
+
+.agent-choice-label {
+  color: var(--dim-3);
+  font-size: 11px;
+}
+
+.agent-choice {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 4px 8px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.04);
+  color: var(--dim-3);
+  font: 500 11px var(--font);
+  opacity: 0.55;
+  cursor: default;
+  transition: opacity 0.18s, color 0.18s, background 0.18s, border-color 0.18s;
+}
+
+.agent-choice.on {
+  opacity: 1;
+  color: var(--ink);
+  background: rgba(255, 255, 255, 0.1);
+  border-color: rgba(255, 255, 255, 0.2);
 }
 
 /* ── Utility ────────────────────────────────────────────────────────────── */

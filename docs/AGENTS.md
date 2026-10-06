@@ -73,11 +73,10 @@ Send newline-terminated JSON to the socket:
 
 ## Supported events
 
-All standard Claude Code hook events are supported, **except `PermissionRequest`**:
-approval cards are not yet implemented for third-party agents (only Claude Code gets
-one). A `PermissionRequest` from an external agent is answered immediately with no
-decision, so the relay writes nothing and the agent re-asks in its terminal.
-Approval support for other agents will be added with Codex support.
+All standard Claude Code hook events are supported. Approval cards are implemented
+for Claude Code and Codex. A `PermissionRequest` from any other external agent is
+answered immediately with no decision, so the relay writes nothing and the agent
+re-asks in its own interface.
 
 The pill lifecycle:
 
@@ -92,6 +91,7 @@ The pill lifecycle:
 | `StopFailure` | State → error |
 | `SessionEnd` | Active declared pills (catalog + checked in Settings) reset to idle — all others are removed |
 | `SubagentStart` / `SubagentStop` | Step added to ticker |
+| `Interrupt` | State → idle; interruption shown in ticker |
 
 ## Declared pills
 
@@ -99,7 +99,7 @@ A **declared pill** is a catalog entry (`PillCatalog.swift`) that has been enabl
 
 A catalog pill that is not checked in Settings behaves like any other agent: it gets an automatic pill when a session starts, and that pill is removed when the session ends.
 
-The GitHub build exposes Gemini CLI (`agent_gemini`) and Antigravity (`agent_antigravity`) in Settings → Active pills. Cursor (`agent_cursor`) and Codex (`agent_codex`, GitHub build only) are there too — their pills can be declared and set as the main pill; session support is coming in a future version.
+The GitHub build exposes Gemini CLI (`agent_gemini`) and Antigravity (`agent_antigravity`) in Settings → Active pills. Cursor (`agent_cursor`) and Codex (`agent_codex`, GitHub build only) are there too. On Windows/Linux, `--agent codex` maps to the permanent, toggleable `integration_codex` pill. Codex session and approval support is available through **Settings → Codex Hooks** on macOS and **Settings → Codex in VS Code** on Windows/Linux.
 
 ## Real-world examples
 

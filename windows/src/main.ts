@@ -55,7 +55,13 @@ async function main() {
 
   // The settings window writes preferences; apply them here without a restart.
   await onEvent<Settings>("settings-changed", (s) => {
+    const providerChanged = State.settings.chatProvider !== s.chatProvider;
     State.settings = { ...State.settings, ...s };
+    if (providerChanged) {
+      State.chatHistory = [];
+      State.noteMessage = null;
+      void Bridge.chatReset();
+    }
     island.applySettings();
     State.loadIntegrationTasks();
     void refreshConfigured();

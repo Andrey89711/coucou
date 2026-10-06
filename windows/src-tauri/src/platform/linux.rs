@@ -134,6 +134,17 @@ pub fn reveal_folder(path: &str) {
     let _ = Command::new("xdg-open").arg(path).spawn();
 }
 
+/// Opens the first available terminal emulator in the requested directory.
+pub fn open_terminal(path: &Path) -> bool {
+    for terminal in ["x-terminal-emulator", "kgx", "gnome-terminal", "konsole", "xfce4-terminal"] {
+        let Some(exe) = find_on_path(terminal) else { continue };
+        if Command::new(exe).current_dir(path).spawn().is_ok() {
+            return true;
+        }
+    }
+    false
+}
+
 /// Our own `which`: the first executable file named `stem` on $PATH.
 pub fn find_on_path(stem: &str) -> Option<PathBuf> {
     let dirs = std::env::var_os("PATH")?;

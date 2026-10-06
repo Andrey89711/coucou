@@ -24,6 +24,7 @@ export interface ViewActions {
   toggleSound(): void;
   setVolume(v: number): void;
   setAutoClose(seconds: number): void;
+  toggleIntegration(id: "integration_claude" | "integration_codex"): void;
   openSettingsWindow(): void;
   blip(): void;
 }
@@ -172,10 +173,11 @@ function buildOverview(actions: ViewActions): ViewHost {
         mode = null;
       }
 
-      // VS Code with a live Claude Code session keeps the ticker; every other
-      // pill shows its own card, exactly like IntegrationCardView.
+      // Editor agents with a live session keep the ticker; every other pill
+      // shows its own card, exactly like IntegrationCardView.
       const sessionActive =
-        task?.id === "integration_claude" && (task.state !== "idle" || task.steps.length > 0);
+        (task?.id === "integration_claude" || task?.id === "integration_codex")
+        && (task.state !== "idle" || task.steps.length > 0);
 
       if (task && sessionActive) {
         if (mode !== "ticker") {
@@ -188,7 +190,10 @@ function buildOverview(actions: ViewActions): ViewHost {
         who.append(
           dot(task.color, 7),
           h("span", { class: "name", text: task.name }),
-          h("span", { class: "tool", text: task.source === "claudeCode" ? "Claude Code" : "n8n" }),
+          h("span", {
+            class: "tool",
+            text: task.source === "claudeCode" ? "Claude Code" : task.source === "codex" ? "Codex" : "n8n",
+          }),
         );
         if (task.steps.length > 1) {
           who.append(h("span", {
@@ -214,7 +219,7 @@ function buildOverview(actions: ViewActions): ViewHost {
 
       jump.style.display = detailOpen ? "none" : "";
 
-      const others = State.otherTasks.slice(0, 4);
+      const others = State.otherTasks.slice(0, 5);
       const pillKey = others.map((t) => `${t.id}:${t.pillBadge ?? ""}`).join("|");
       if (pillKey !== pillIds) {
         pillIds = pillKey;
@@ -227,7 +232,7 @@ function buildOverview(actions: ViewActions): ViewHost {
 }
 
 function buildPill(task: AgentTask, actions: ViewActions): HTMLElement {
-  const label = task.id === "integration_claude" ? "VS Code" : task.name;
+  const label = task.name;
   const canvas = createMiniBot(task, 24);
   const pill = h(
     "div",
@@ -373,9 +378,11 @@ function buildFinished(actions: ViewActions): ViewHost {
   return {
     el,
     sync() {
+      const task = State.focusTask;
       clear(who);
-      who.append(agentWho(State.focusTask, "Claude Code finished"));
-      title.textContent = State.focusTask?.steps.at(-1) ?? "Session finished";
+      const finishedBy = task?.source === "codex" ? "Codex finished" : "Claude Code finished";
+      who.append(agentWho(task, finishedBy));
+      title.textContent = task?.steps.at(-1) ?? "Session finished";
     },
   };
 }
@@ -417,8 +424,18 @@ function buildSettings(actions: ViewActions): ViewHost {
   const segButtons = [10, 15, 30].map((s) =>
     h("button", { onclick: () => actions.setAutoClose(s) }, `${s}s`),
   );
-  const claudeBadge = h("span", { class: "status-badge" });
-  const apiBadge = h("span", { class: "status-badge" });
+  const claudeChoice = h(
+    "button",
+    { class: "agent-choice", onclick: () => actions.toggleIntegration("integration_claude") },
+    dot("#F5F6F8", 6),
+    h("span", { text: "Claude Code" }),
+  );
+  const codexChoice = h(
+    "button",
+    { class: "agent-choice", onclick: () => actions.toggleIntegration("integration_codex") },
+    dot("#C96AF2", 6),
+    h("span", { text: "OpenAI Codex" }),
+  );
 
   const rows = h(
     "div",
@@ -433,9 +450,10 @@ function buildSettings(actions: ViewActions): ViewHost {
     ),
     h(
       "div",
-      { class: "settings-row", style: "gap:14px" },
-      claudeBadge,
-      apiBadge,
+      { class: "settings-row", style: "gap:8px" },
+      h("span", { class: "agent-choice-label", text: "Agents" }),
+      claudeChoice,
+      codexChoice,
       h("div", { class: "grow" }),
       h("button", {
         class: "link-btn",
@@ -458,13 +476,12 @@ function buildSettings(actions: ViewActions): ViewHost {
       volume.style.opacity = s.soundEnabled ? "1" : "0.4";
       autoLabel.textContent = `Auto-close · ${Math.round(s.autoCloseInterval)}s`;
       segButtons.forEach((b, i) => b.classList.toggle("on", s.autoCloseInterval === [10, 15, 30][i]));
-      clear(claudeBadge);
-      claudeBadge.append(
-        dot(s.hooksInstalled ? "#22C55E" : "#F4505E", 6),
-        h("span", { text: "Claude Code" }),
-      );
-      clear(apiBadge);
-      apiBadge.append(dot("#F4505E", 6), h("span", { text: "API" }));
+      const claudeOn = s.activeIntegrations.includes("integration_claude");
+      const codexOn = s.activeIntegrations.includes("integration_codex");
+      claudeChoice.classList.toggle("on", claudeOn);
+      claudeChoice.setAttribute("aria-pressed", String(claudeOn));
+      codexChoice.classList.toggle("on", codexOn);
+      codexChoice.setAttribute("aria-pressed", String(codexOn));
     },
   };
 }

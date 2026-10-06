@@ -9,6 +9,7 @@ import { State } from "../core/state";
 import type { Island } from "./island";
 
 const CLAUDE_ID = "integration_claude";
+const CODEX_ID = "integration_codex";
 
 /** Clears the approval card if no decision was made before the hook gave up. */
 let pendingTimeout: number | null = null;
@@ -21,6 +22,8 @@ interface HookPayload {
   message?: string;
   /** UserPromptSubmit carries `prompt`; `message` belongs to Notification/Stop. */
   prompt?: string;
+  /** Codex Stop carries the final response here. */
+  last_assistant_message?: string;
   tool_name?: string;
   tool_input?: Record<string, unknown>;
   /** Optional agent tag: lowercase, digits and hyphens, ≤ 24 chars. */
@@ -44,16 +47,6 @@ function agentColor(name: string): string {
   return FALLBACK_COLORS[Math.abs(h) % FALLBACK_COLORS.length];
 }
 
-const PROJECT_ALIASES: Record<string, string> = {
-  "notch-buddy": "Notch Buddy",
-  notchbuddy: "Notch Buddy",
-  notch_buddy: "Notch Buddy",
-};
-
-function aliasProjectName(name: string): string {
-  return PROJECT_ALIASES[name.toLowerCase()] ?? name;
-}
-
 function lastPathComponent(p: string): string {
   const cleaned = p.replace(/[\\/]+$/, "");
   const idx = Math.max(cleaned.lastIndexOf("\\"), cleaned.lastIndexOf("/"));
@@ -75,6 +68,7 @@ const TOOL_LABELS: Record<string, string> = {
   LS: "Liste",
   MultiEdit: "Modifie",
   NotebookEdit: "Notebook",
+  apply_patch: "Modifie",
   PowerShell: "Exécute",
 };
 
@@ -120,19 +114,17 @@ function approvalTarget(tool: string, input: Record<string, unknown>): string {
   return tool;
 }
 
-function upsert(projectName: string, cwd: string) {
+function updateClaudeSession(cwd: string) {
   const t = State.tasks.find((x) => x.id === CLAUDE_ID);
   if (!t) return;
-  t.name = projectName;
   if (cwd) t.sessionCwd = cwd;
 }
 
-function clearSession() {
-  const t = State.tasks.find((x) => x.id === CLAUDE_ID);
+function clearSession(agentId: string) {
+  const t = State.tasks.find((x) => x.id === agentId);
   if (!t) return;
   t.steps = [];
   t.stepIndex = 0;
-  t.name = "VS Code";
   t.pillBadge = null;
 }
 
@@ -151,14 +143,23 @@ function handleHook(island: Island, payload: HookPayload) {
 
   const name = payload.hook_event_name ?? "";
   const cwd = payload.cwd ?? "";
-  const raw = lastPathComponent(cwd);
-  const projectName = aliasProjectName(raw || "Session");
 
-  // Route to the right pill. Valid coucou_agent → dynamic "agent_<name>" pill.
-  // "claude" is reserved; absent or invalid → Claude Code pill unchanged.
+  // Codex has a declared integration; other valid agent tags remain dynamic.
+  // "claude" is reserved; absent or invalid routes to Claude Code.
   const validAgent = validateAgent(payload.coucou_agent);
-  const agentId = validAgent ? `agent_${validAgent}` : CLAUDE_ID;
-  const isExternalAgent = validAgent !== null;
+  const isCodex = validAgent === "codex";
+  const agentId = isCodex ? CODEX_ID : validAgent ? `agent_${validAgent}` : CLAUDE_ID;
+  const isExternalAgent = validAgent !== null && !isCodex;
+
+  // Disabled editor integrations stay silent even if their hooks remain
+  // installed. Permission requests are released immediately to the editor.
+  if (
+    (agentId === CLAUDE_ID || agentId === CODEX_ID)
+    && !State.settings.activeIntegrations.includes(agentId)
+  ) {
+    if (payload.request_id) void Bridge.approvalDecline(payload.request_id);
+    return;
+  }
 
   const focused = State.focusId === agentId;
 
@@ -178,7 +179,13 @@ function handleHook(island: Island, payload: HookPayload) {
     if (isExternalAgent) {
       State.upsertExternalAgent(agentId, validAgent!, agentColor(validAgent!));
     } else {
-      upsert(projectName, cwd);
+      const task = State.tasks.find((item) => item.id === agentId);
+      if (!task) return;
+      if (agentId === CLAUDE_ID) {
+        updateClaudeSession(cwd);
+      } else if (cwd) {
+        task.sessionCwd = cwd;
+      }
     }
   };
 
@@ -232,7 +239,9 @@ function handleHook(island: Island, payload: HookPayload) {
 
     case "Stop":
       State.updateTask(agentId, "finished");
-      if (payload.message) State.appendStep(agentId, payload.message.slice(0, 60));
+      if (payload.message || payload.last_assistant_message) {
+        State.appendStep(agentId, (payload.message ?? payload.last_assistant_message!).slice(0, 60));
+      }
       Sound.play("finish");
       if (focused) surface("finished", true);
       else State.setPillBadge(agentId, "finished");
@@ -258,8 +267,14 @@ function handleHook(island: Island, payload: HookPayload) {
         State.removeTask(agentId);
       } else {
         State.updateTask(agentId, "idle");
-        clearSession();
+        clearSession(agentId);
       }
+      break;
+
+    case "Interrupt":
+      ensurePill();
+      State.updateTask(agentId, "idle");
+      State.appendStep(agentId, "Stopped by user");
       break;
 
     case "SubagentStart":
@@ -271,9 +286,8 @@ function handleHook(island: Island, payload: HookPayload) {
       break;
 
     case "PermissionRequest": {
-      // External agents do not get an approval card — showing one would look like
-      // a Claude Code request. Decline immediately so the agent re-asks in its
-      // terminal. Approval support for other agents will come with Codex support.
+      // Codex uses the same documented allow/deny response shape as Claude Code.
+      // Unknown external agents still fall back to their own terminal.
       if (isExternalAgent) {
         if (payload.request_id) void Bridge.approvalDecline(payload.request_id);
         break;
@@ -287,31 +301,27 @@ function handleHook(island: Island, payload: HookPayload) {
         if (requestId) void Bridge.approvalDecline(requestId);
         break;
       }
-      upsert(projectName, cwd);
+      ensurePill();
       if (pendingTimeout != null) window.clearTimeout(pendingTimeout);
       const tool = payload.tool_name ?? "Tool";
       const input = payload.tool_input ?? {};
       State.pendingApproval = {
         requestId,
         sessionId: payload.session_id ?? "",
+        pillId: agentId,
         tool,
         command: approvalTarget(tool, input),
       };
+      // Permission prompts are actionable and time-limited. Bring the owning
+      // agent forward instead of hiding its card behind the current pill.
+      State.setFocus(agentId);
       // The relay's short ack window closes in 800 ms; everything below this
       // line is synchronous, so the card really is up by the time it lands.
       if (requestId) void Bridge.approvalAck(requestId);
-      State.updateTask(CLAUDE_ID, "approval");
+      State.updateTask(agentId, "approval");
       State.isPinned = true;
       Sound.play("approval");
-      if (focused) {
-        island.alert("approval");
-      } else {
-        // Another agent holds the view, so the card would yank it away. The badge
-        // is the signal instead — but it has to be on screen for that to mean
-        // anything, hence the reveal. We just told the relay a human can act.
-        State.setPillBadge(CLAUDE_ID, "approval");
-        island.reveal();
-      }
+      island.alert("approval");
       // Coucou answers within 108 s or not at all; after that the terminal has
       // taken over and the card would be lying.
       pendingTimeout = window.setTimeout(() => {
@@ -320,8 +330,8 @@ function handleHook(island: Island, payload: HookPayload) {
         State.pendingApproval = null;
         State.isPinned = false;
         island.dropPin();
-        State.updateTask(CLAUDE_ID, "working");
-        State.setPillBadge(CLAUDE_ID, null);
+        State.updateTask(agentId, "working");
+        State.setPillBadge(agentId, null);
         if (State.view === "approval") island.setView(State.defaultView());
         State.notify();
       }, 110_000);

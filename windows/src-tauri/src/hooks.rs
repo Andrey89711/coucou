@@ -33,6 +33,25 @@ pub const HOOK_EVENTS: &[(&str, u64)] = &[
     ("SubagentStop", 10),
 ];
 
+/// Codex exposes a smaller, stable lifecycle surface than Claude Code. Keep
+/// this list aligned with https://developers.openai.com/codex/hooks.
+pub const CODEX_HOOK_EVENTS: &[(&str, u64, Option<&str>)] = &[
+    ("SessionStart", 10, None),
+    ("UserPromptSubmit", 10, None),
+    ("PreToolUse", 10, None),
+    (
+        "PermissionRequest",
+        120,
+        Some("Waiting for your answer in Coucou"),
+    ),
+    ("PostToolUse", 10, None),
+    ("Stop", 10, None),
+    ("SubagentStart", 10, None),
+    ("SubagentStop", 10, None),
+    ("Interrupt", 3, None),
+    ("SessionEnd", 3, None),
+];
+
 /// Marker that identifies a Coucou entry inside settings.json.
 const MARKER: &str = "coucou-hook";
 
@@ -60,6 +79,10 @@ pub fn settings_path() -> PathBuf {
     platform::home_dir().join(".claude").join("settings.json")
 }
 
+pub fn codex_settings_path() -> PathBuf {
+    platform::home_dir().join(".codex").join("hooks.json")
+}
+
 /// Reads `~/.claude/settings.json`.
 ///
 /// The only error that means "start from nothing" is the file not being there.
@@ -67,7 +90,14 @@ pub fn settings_path() -> PathBuf {
 /// we cannot parse — is reported, because the alternative is treating somebody's
 /// unreadable settings as an empty object and then writing that back over them.
 fn read_settings() -> Result<Value, String> {
-    let path = settings_path();
+    read_json_object(&settings_path())
+}
+
+fn read_codex_settings() -> Result<Value, String> {
+    read_json_object(&codex_settings_path())
+}
+
+fn read_json_object(path: &Path) -> Result<Value, String> {
     match std::fs::read(&path) {
         Ok(bytes) => parse_settings(&bytes, &path.display().to_string()),
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(json!({})),
@@ -103,10 +133,36 @@ fn read_settings_lossy() -> Value {
     read_settings().unwrap_or_else(|_| json!({}))
 }
 
+fn read_codex_settings_lossy() -> Value {
+    read_codex_settings().unwrap_or_else(|_| json!({}))
+}
+
 #[cfg(windows)]
 fn hook_command(event: &str) -> String {
     let exe = settings::hook_exe_path().to_string_lossy().replace('\\', "/");
     format!("\"{exe}\" {event}")
+}
+
+#[cfg(windows)]
+fn codex_hook_command() -> String {
+    let exe = settings::hook_exe_path()
+        .to_string_lossy()
+        .replace('\\', "/");
+    format!("\"{exe}\" --agent codex")
+}
+
+/// Codex 0.160 wraps Windows hook commands in another quoted `cmd.exe /C`
+/// argument. Any quote in the configured command is escaped as `\"`, which cmd
+/// treats literally and the hook exits with code 1. An encoded PowerShell body
+/// keeps the outer command completely quote-free while still supporting spaces
+/// and apostrophes in the user's profile path.
+#[cfg(windows)]
+fn codex_hook_command_windows() -> String {
+    let exe = settings::hook_exe_path().to_string_lossy().replace('\'', "''");
+    let script = format!("& '{exe}' --agent codex; exit $LASTEXITCODE");
+    let utf16le: Vec<u8> = script.encode_utf16().flat_map(u16::to_le_bytes).collect();
+    let encoded = crate::claude::base64_for(&utf16le);
+    format!("powershell.exe -NoProfile -NonInteractive -EncodedCommand {encoded}")
 }
 
 /// Claude Code runs the command through `sh`, which still reads `$`, `` ` ``
@@ -115,6 +171,14 @@ fn hook_command(event: &str) -> String {
 #[cfg(unix)]
 fn hook_command(event: &str) -> String {
     format!("{} {event}", sh_quote(&settings::hook_exe_path().to_string_lossy()))
+}
+
+#[cfg(unix)]
+fn codex_hook_command() -> String {
+    format!(
+        "{} --agent codex",
+        sh_quote(&settings::hook_exe_path().to_string_lossy())
+    )
 }
 
 /// `s` as one single-quoted shell word: `'` becomes `'\''`, nothing else is
@@ -133,6 +197,21 @@ fn entry_is_ours(entry: &Value) -> bool {
                 h.get("command")
                     .and_then(Value::as_str)
                     .map(|c| c.contains(MARKER))
+                    .unwrap_or(false)
+            })
+        })
+        .unwrap_or(false)
+}
+
+fn entry_is_codex_ours(entry: &Value) -> bool {
+    entry
+        .get("hooks")
+        .and_then(Value::as_array)
+        .map(|hooks| {
+            hooks.iter().any(|h| {
+                h.get("command")
+                    .and_then(Value::as_str)
+                    .map(|c| c.contains(MARKER) && c.contains("--agent codex"))
                     .unwrap_or(false)
             })
         })
@@ -198,6 +277,87 @@ fn without_ours(existing: &Value) -> Value {
     Value::Object(root)
 }
 
+fn merged_codex(existing: &Value) -> Result<Value, String> {
+    let mut root = existing.as_object().cloned().unwrap_or_default();
+    let raw_hooks = root.get("hooks");
+    if raw_hooks.is_some_and(|v| !v.is_object()) {
+        return Err(
+            "~/.codex/hooks.json: \"hooks\" has an unexpected type — Coucou won't touch it.".into(),
+        );
+    }
+    let mut hooks = raw_hooks
+        .and_then(Value::as_object)
+        .cloned()
+        .unwrap_or_default();
+
+    for (event, timeout, status_message) in CODEX_HOOK_EVENTS {
+        if hooks.get(*event).is_some_and(|v| !v.is_array()) {
+            return Err(format!(
+                "~/.codex/hooks.json: hooks.{event} has an unexpected type — Coucou won't touch it."
+            ));
+        }
+        let mut list = hooks
+            .get(*event)
+            .and_then(Value::as_array)
+            .cloned()
+            .unwrap_or_default();
+        list.retain(|entry| !entry_is_codex_ours(entry));
+        let mut handler = json!({
+            "type": "command",
+            "command": codex_hook_command(),
+            "timeout": timeout,
+        });
+        // Without this override Codex treats `command` as a POSIX command. A
+        // normal Windows install has no sh/bash, so every hook exits with code 1.
+        #[cfg(windows)]
+        {
+            handler["commandWindows"] = json!(codex_hook_command_windows());
+        }
+        if let Some(message) = status_message {
+            handler["statusMessage"] = json!(message);
+        }
+        list.push(json!({ "hooks": [handler] }));
+        hooks.insert((*event).to_string(), Value::Array(list));
+    }
+
+    root.insert("hooks".into(), Value::Object(hooks));
+    Ok(Value::Object(root))
+}
+
+fn without_codex_ours(existing: &Value) -> Result<Value, String> {
+    let mut root = existing.as_object().cloned().unwrap_or_default();
+    let Some(raw_hooks) = root.get("hooks") else {
+        return Ok(Value::Object(root));
+    };
+    let Some(hooks) = raw_hooks.as_object() else {
+        return Err(
+            "~/.codex/hooks.json: \"hooks\" has an unexpected type — Coucou won't touch it.".into(),
+        );
+    };
+    let mut out = Map::new();
+    for (event, value) in hooks {
+        let Some(list) = value.as_array() else {
+            return Err(format!(
+                "~/.codex/hooks.json: hooks.{event} has an unexpected type — Coucou won't touch it."
+            ));
+        };
+        let kept: Vec<Value> = list
+            .iter()
+            .filter(|e| !entry_is_codex_ours(e))
+            .cloned()
+            .collect();
+        if !kept.is_empty() {
+            out.insert(event.clone(), Value::Array(kept));
+        }
+    }
+    if out.is_empty() {
+        root.remove("hooks");
+    } else {
+        root.insert("hooks".into(), Value::Object(out));
+    }
+    Ok(Value::Object(root))
+}
+
 fn pretty(v: &Value) -> String {
     serde_json::to_string_pretty(v).unwrap_or_default()
 }
@@ -217,6 +377,11 @@ fn backup_path() -> PathBuf {
     p.with_file_name(format!("settings.json.bak-{}", stamp()))
 }
 
+fn codex_backup_path() -> PathBuf {
+    let p = codex_settings_path();
+    p.with_file_name(format!("hooks.json.bak-{}", stamp()))
+}
+
 /// Identifies the exact bytes a preview was computed from. FNV-1a is plenty:
 /// the question is only "is this still the file I showed the user?".
 fn fingerprint(bytes: &[u8]) -> String {
@@ -230,6 +395,13 @@ fn fingerprint(bytes: &[u8]) -> String {
 
 fn current_fingerprint() -> String {
     match std::fs::read(settings_path()) {
+        Ok(bytes) => fingerprint(&bytes),
+        Err(_) => fingerprint(b""),
+    }
+}
+
+fn fingerprint_at(path: &Path) -> String {
+    match std::fs::read(path) {
         Ok(bytes) => fingerprint(&bytes),
         Err(_) => fingerprint(b""),
     }
@@ -270,6 +442,44 @@ pub fn preview(install: bool) -> Result<HookPreview, String> {
     })
 }
 
+pub fn codex_status() -> HookStatus {
+    let current = read_codex_settings_lossy();
+    let installed = current
+        .get("hooks")
+        .and_then(Value::as_object)
+        .map(|hooks| {
+            hooks
+                .values()
+                .filter_map(Value::as_array)
+                .flatten()
+                .any(entry_is_codex_ours)
+        })
+        .unwrap_or(false);
+    let hook_path = settings::hook_exe_path();
+    HookStatus {
+        installed,
+        settings_path: codex_settings_path().to_string_lossy().to_string(),
+        hook_ready: hook_path.exists(),
+        hook_path: hook_path.to_string_lossy().to_string(),
+    }
+}
+
+pub fn codex_preview(install: bool) -> Result<HookPreview, String> {
+    let path = codex_settings_path();
+    let current = read_codex_settings()?;
+    let next = if install {
+        merged_codex(&current)?
+    } else {
+        without_codex_ours(&current)?
+    };
+    Ok(HookPreview {
+        diff: unified_diff(&pretty(&current), &pretty(&next)),
+        backup: codex_backup_path().to_string_lossy().to_string(),
+        settings_path: path.to_string_lossy().to_string(),
+        fingerprint: fingerprint_at(&path),
+    })
+}
+
 /// Writes the merged (or cleaned) settings after taking a dated backup.
 ///
 /// `fingerprint` is the one the preview was computed from. If the file changed
@@ -307,6 +517,40 @@ pub fn write(install: bool, fingerprint: &str) -> Result<String, String> {
 
     // Write beside the target and rename over it: a crash or a full disk leaves
     // the original settings.json intact rather than half a file.
+    let temp = path.with_extension(format!("json.coucou-{}", std::process::id()));
+    if let Err(err) = write_like(&temp, &path, text.as_bytes()) {
+        let _ = std::fs::remove_file(&temp);
+        return Err(format!("write failed: {err}"));
+    }
+    if let Err(err) = std::fs::rename(&temp, &path) {
+        let _ = std::fs::remove_file(&temp);
+        return Err(format!("write failed: {err}"));
+    }
+    Ok(backup.to_string_lossy().to_string())
+}
+
+pub fn codex_write(install: bool, expected_fingerprint: &str) -> Result<String, String> {
+    let path = codex_settings_path();
+    let dir = path.parent().unwrap_or(Path::new("."));
+    std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
+    let current = read_codex_settings()?;
+    if fingerprint_at(&path) != expected_fingerprint {
+        return Err(format!(
+            "{} changed since the preview. Nothing was written — review the new diff.",
+            path.display()
+        ));
+    }
+    let backup = codex_backup_path();
+    if path.exists() {
+        std::fs::copy(&path, &backup).map_err(|e| format!("backup failed: {e}"))?;
+    }
+    let next = if install {
+        merged_codex(&current)?
+    } else {
+        without_codex_ours(&current)?
+    };
+    let mut text = pretty(&next);
+    text.push('\n');
     let temp = path.with_extension(format!("json.coucou-{}", std::process::id()));
     if let Err(err) = write_like(&temp, &path, text.as_bytes()) {
         let _ = std::fs::remove_file(&temp);
@@ -571,6 +815,39 @@ mod tests {
 
         // And removing ours puts it back exactly as it was.
         let cleaned = without_ours(&after);
+        assert_eq!(cleaned, existing);
+    }
+
+    #[test]
+    fn codex_merge_round_trip_preserves_foreign_hooks() {
+        let existing = serde_json::json!({
+            "description": "my hooks",
+            "hooks": {
+                "PreToolUse": [
+                    { "hooks": [{ "type": "command", "command": "my-policy.exe" }] }
+                ]
+            }
+        });
+
+        let after = merged_codex(&existing).unwrap();
+        let pre = after["hooks"]["PreToolUse"].as_array().unwrap();
+        assert!(pre.iter().any(|e| serde_json::to_string(e).unwrap().contains("my-policy.exe")));
+        assert!(pre.iter().any(entry_is_codex_ours));
+        assert_eq!(
+            after["hooks"]["PermissionRequest"][0]["hooks"][0]["statusMessage"],
+            "Waiting for your answer in Coucou"
+        );
+        #[cfg(windows)]
+        {
+            let command = after["hooks"]["SessionStart"][0]["hooks"][0]["commandWindows"]
+                .as_str()
+                .unwrap();
+            assert!(command.starts_with("powershell.exe -NoProfile -NonInteractive -EncodedCommand "));
+            assert!(!command.contains('\''));
+            assert!(!command.contains('"'));
+        }
+
+        let cleaned = without_codex_ours(&after).unwrap();
         assert_eq!(cleaned, existing);
     }
 
