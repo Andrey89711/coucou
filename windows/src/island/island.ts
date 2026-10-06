@@ -143,6 +143,7 @@ export class Island {
         Sound.play(d === "deny" ? "blip" : "approve");
         void Bridge.approvalDecision(req.requestId, d);
         State.pendingApproval = null;
+        State.approvalExpanded = false;
         State.isPinned = false;
         this.fsm.pinned = false;
         State.updateTask(req.pillId, "working");
@@ -456,7 +457,14 @@ export class Island {
   // ── Geometry ────────────────────────────────────────────────────────────────
 
   private targetSize(): { w: number; h: number; r: number } {
-    const { w, h } = islandSize(State.mode, State.view, State.chatHistory.length);
+    const { w, h } = islandSize(
+      State.mode,
+      State.view,
+      State.chatHistory.length,
+      State.chatExpanded,
+      State.approvalExpanded,
+      State.finishedExpanded,
+    );
     const r = State.mode === "expanded" ? EXPANDED_CORNER : ROUNDED_CORNER;
     return { w, h, r };
   }
@@ -899,6 +907,6 @@ export class Island {
   }
 
   get chatHeight() {
-    return chatPromptHeight(State.chatHistory.length);
+    return chatPromptHeight(State.chatHistory.length, State.chatExpanded);
   }
 }

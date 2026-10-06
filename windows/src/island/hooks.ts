@@ -238,6 +238,7 @@ function handleHook(island: Island, payload: HookPayload) {
     }
 
     case "Stop":
+      State.finishedExpanded = false;
       State.updateTask(agentId, "finished");
       if (payload.message || payload.last_assistant_message) {
         State.appendStep(agentId, (payload.message ?? payload.last_assistant_message!).slice(0, 60));
@@ -311,7 +312,10 @@ function handleHook(island: Island, payload: HookPayload) {
         pillId: agentId,
         tool,
         command: approvalTarget(tool, input),
+        cwd,
+        input,
       };
+      State.approvalExpanded = false;
       // Permission prompts are actionable and time-limited. Bring the owning
       // agent forward instead of hiding its card behind the current pill.
       State.setFocus(agentId);
@@ -328,6 +332,7 @@ function handleHook(island: Island, payload: HookPayload) {
         pendingTimeout = null;
         if (!State.pendingApproval) return;
         State.pendingApproval = null;
+        State.approvalExpanded = false;
         State.isPinned = false;
         island.dropPin();
         State.updateTask(agentId, "working");

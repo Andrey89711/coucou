@@ -58,6 +58,9 @@ export const Bridge = {
   /** Opens a visible terminal in the active agent's working directory. */
   openTerminal: (path: string | null) => call<boolean>("open_terminal", { path }),
 
+  /** Reads the current Git diff for a finished agent session. */
+  projectDiff: (path: string | null) => callOrThrow<string>("project_diff", { path }),
+
   quit: () => call<void>("quit_app"),
 
   openSettingsWindow: () => call<void>("open_settings_window"),

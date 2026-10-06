@@ -51,7 +51,7 @@ export interface ViewLayout {
 // The window is a fixed 720×320 (largest view) like the macOS panel; the island is
 // drawn inside it, glued to the top edge and horizontally centred.
 export const PANEL_W = 720;
-export const PANEL_H = 320;
+export const PANEL_H = 500;
 
 // No notch on a PC: these are the hidden/compact sizes from docs/SPEC.md.
 export const NOTCH_W = 184;
@@ -93,14 +93,17 @@ export const VIEW_LAYOUTS: Record<IslandViewName, ViewLayout> = {
 // owns its own constants (USC) straight from UploadSequenceEngine.swift.
 
 /** Chat view grows with the conversation — IslandContainer.chatPromptHeight. */
-export function chatPromptHeight(messageCount: number): number {
-  return Math.min(300, 240 + messageCount * 40);
+export function chatPromptHeight(messageCount: number, expanded = false): number {
+  return expanded ? 480 : Math.min(300, 240 + messageCount * 40);
 }
 
 export function islandSize(
   mode: IslandMode,
   view: IslandViewName,
   chatCount = 0,
+  chatExpanded = false,
+  approvalExpanded = false,
+  finishedExpanded = false,
 ): { w: number; h: number } {
   switch (mode) {
     case "hidden":
@@ -110,7 +113,13 @@ export function islandSize(
     case "compact":
       return { w: COMPACT_W, h: NOTCH_H };
     case "expanded": {
-      const h = view === "prompt" ? chatPromptHeight(chatCount) : VIEW_LAYOUTS[view].height;
+      const h = view === "prompt"
+        ? chatPromptHeight(chatCount, chatExpanded)
+        : view === "approval" && approvalExpanded
+          ? 310
+          : view === "finished" && finishedExpanded
+            ? 440
+          : VIEW_LAYOUTS[view].height;
       return { w: EXPANDED_W, h };
     }
   }

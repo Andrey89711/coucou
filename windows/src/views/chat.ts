@@ -46,12 +46,21 @@ export function buildPrompt(onHeightChange: () => void): ViewHost {
     spellcheck: "false",
   }) as HTMLInputElement;
   const send = h("button", { class: "send-btn", title: "Send" }, svg(ICONS.arrowUp, 11));
+  const expand = h("button", {
+    class: "chat-expand",
+    title: "Expand chat",
+    text: "↕",
+  });
   const bar = h("div", { class: "chat-bar" }, input, send);
 
   const el = h(
     "div",
     { class: "view" },
-    h("div", { class: "card wash chat-card" }, h("div", { class: "chat-body" }, chipRow, log, bar)),
+    h(
+      "div",
+      { class: "card wash chat-card" },
+      h("div", { class: "chat-body" }, chipRow, log, bar, expand),
+    ),
   );
   const card = el.querySelector(".card") as HTMLElement;
 
@@ -100,6 +109,13 @@ export function buildPrompt(onHeightChange: () => void): ViewHost {
     }
     e.stopPropagation(); // Escape closes the island, not the chat
   });
+  expand.addEventListener("click", () => {
+    State.chatExpanded = !State.chatExpanded;
+    expand.classList.toggle("on", State.chatExpanded);
+    expand.title = State.chatExpanded ? "Compact chat" : "Expand chat";
+    State.notify();
+    onHeightChange();
+  });
 
   return {
     el,
@@ -110,6 +126,8 @@ export function buildPrompt(onHeightChange: () => void): ViewHost {
         "--wash",
         provider === "openai" ? "rgba(16,163,127,0.46)" : "rgba(99,102,241,0.5)",
       );
+      expand.classList.toggle("on", State.chatExpanded);
+      expand.title = State.chatExpanded ? "Compact chat" : "Expand chat";
       const file = State.droppedFile;
       const wantChip = [providerLabel, file?.name].filter(Boolean).join(" · ");
       if (chipRow.dataset.label !== wantChip) {

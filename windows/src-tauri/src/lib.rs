@@ -180,6 +180,109 @@ fn open_terminal(path: Option<String>) -> bool {
     platform::open_terminal(path)
 }
 
+fn git_root(dir: &std::path::Path) -> Option<std::path::PathBuf> {
+    if !dir.is_dir() {
+        return None;
+    }
+    let mut command = Command::new("git");
+    command
+        .arg("-C")
+        .arg(dir)
+        .args(["rev-parse", "--show-toplevel"]);
+    let output = platform::no_console(&mut command).output().ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let root = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    (!root.is_empty()).then(|| std::path::PathBuf::from(root))
+}
+
+/// Codex reports the session working directory. That can legitimately be a
+/// workspace folder immediately above the actual repository (for example,
+/// `Desktop/coucou/coucou/.git`), so also accept one unambiguous child repo.
+fn resolve_git_root(dir: &std::path::Path) -> Option<std::path::PathBuf> {
+    if let Some(root) = git_root(dir) {
+        return Some(root);
+    }
+
+    let child_roots: Vec<_> = std::fs::read_dir(dir)
+        .ok()?
+        .filter_map(Result::ok)
+        .map(|entry| entry.path())
+        .filter(|path| path.is_dir() && path.join(".git").exists())
+        .filter_map(|path| git_root(&path))
+        .collect();
+    if child_roots.len() == 1 {
+        return child_roots.into_iter().next();
+    }
+    None
+}
+
+/// Returns the current repository diff for the finished card. Arguments are
+/// passed directly to git (never through a shell), and output is bounded before
+/// it crosses IPC.
+#[tauri::command]
+fn project_diff(path: Option<String>) -> Result<String, String> {
+    let dir = path
+        .map(std::path::PathBuf::from)
+        .or_else(|| std::env::current_dir().ok())
+        .ok_or_else(|| "No working directory available.".to_string())?;
+    if !dir.is_dir() {
+        return Err("The session working directory no longer exists.".into());
+    }
+    let root = resolve_git_root(&dir)
+        .or_else(|| std::env::current_dir().ok().and_then(|cwd| resolve_git_root(&cwd)))
+        .ok_or_else(|| {
+            format!(
+                "No Git repository was found in or directly below {}.",
+                dir.display()
+            )
+        })?;
+
+    let mut command = Command::new("git");
+    command
+        .arg("-C")
+        .arg(&root)
+        .args(["diff", "--no-ext-diff", "--no-color", "--unified=3", "HEAD", "--"]);
+    let output = platform::no_console(&mut command)
+        .output()
+        .map_err(|e| format!("Could not run git: {e}"))?;
+    if !output.status.success() {
+        return Err("Git could not calculate the repository changes.".into());
+    }
+
+    let mut text = String::from_utf8_lossy(&output.stdout).to_string();
+    let mut untracked_command = Command::new("git");
+    untracked_command
+        .arg("-C")
+        .arg(&root)
+        .args(["ls-files", "--others", "--exclude-standard"]);
+    if let Ok(untracked) = platform::no_console(&mut untracked_command).output() {
+        let files = String::from_utf8_lossy(&untracked.stdout);
+        if !files.trim().is_empty() {
+            text.push_str("\nUntracked files:\n");
+            for file in files.lines() {
+                text.push_str("? ");
+                text.push_str(file);
+                text.push('\n');
+            }
+        }
+    }
+    if text.trim().is_empty() {
+        return Ok("No uncommitted changes.".into());
+    }
+    const MAX_DIFF: usize = 200_000;
+    if text.len() > MAX_DIFF {
+        let mut end = MAX_DIFF;
+        while !text.is_char_boundary(end) {
+            end -= 1;
+        }
+        text.truncate(end);
+        text.push_str("\n… diff truncated");
+    }
+    Ok(text)
+}
+
 #[tauri::command]
 fn quit_app(app: AppHandle) {
     app.exit(0);
@@ -427,6 +530,7 @@ pub fn run() {
             open_url,
             open_in_vscode,
             open_terminal,
+            project_diff,
             quit_app,
             hooks_status,
             hooks_preview,

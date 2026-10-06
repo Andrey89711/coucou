@@ -27,6 +27,8 @@ export interface ApprovalInfo {
   pillId: string;
   tool: string;
   command: string;
+  cwd: string;
+  input: Record<string, unknown>;
 }
 
 export interface ChatMessage {
@@ -147,6 +149,9 @@ class AppState {
   noteMessage: string | null = null;
   searchResult: SearchResult | null = null;
   chatHistory: ChatMessage[] = [];
+  chatExpanded = false;
+  approvalExpanded = false;
+  finishedExpanded = false;
   pendingApproval: ApprovalInfo | null = null;
 
   integrations: Record<string, IntegrationInfo> = {};

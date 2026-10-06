@@ -5,12 +5,13 @@
 import { h, svg, clear, dot } from "./dom";
 import { ICONS } from "./icons";
 import { Ticker } from "./ticker";
-import { State, type AgentTask } from "../core/state";
+import { State, type AgentTask, type ApprovalInfo } from "../core/state";
 import { washRGBA, type IslandViewName, type Wash } from "../core/layout";
 import { createMiniBot, pruneMiniBots } from "../mochi/minibots";
 import { buildPrompt } from "./chat";
 import { buildChoose, buildUpload, buildUploading } from "./upload";
 import { renderIntegrationCard, type IntegrationCardHooks } from "./integrations";
+import { Bridge } from "../core/bridge";
 
 export interface ViewActions {
   setView(v: IslandViewName): void;
@@ -293,12 +294,74 @@ function buildEmpty(actions: ViewActions): ViewHost {
 
 // ── Approval ──────────────────────────────────────────────────────────────────
 
-function buildApproval(actions: ViewActions): ViewHost {
+function approvalChangePreview(request: ApprovalInfo): string | null {
+  const input = request.input;
+  for (const key of ["patch", "diff"] as const) {
+    if (typeof input[key] === "string" && input[key].trim()) return input[key].trim();
+  }
+  const oldText = typeof input.old_string === "string" ? input.old_string : null;
+  const newText = typeof input.new_string === "string" ? input.new_string : null;
+  if (oldText != null || newText != null) {
+    return [
+      "--- before",
+      "+++ after",
+      ...(oldText ?? "").split("\n").map((line) => `- ${line}`),
+      ...(newText ?? "").split("\n").map((line) => `+ ${line}`),
+    ].join("\n");
+  }
+  if (Array.isArray(input.edits)) {
+    const blocks = input.edits.flatMap((edit, index) => {
+      if (!edit || typeof edit !== "object") return [];
+      const item = edit as Record<string, unknown>;
+      const before = typeof item.old_string === "string" ? item.old_string : "";
+      const after = typeof item.new_string === "string" ? item.new_string : "";
+      return [
+        `@@ edit ${index + 1} @@`,
+        ...before.split("\n").map((line) => `- ${line}`),
+        ...after.split("\n").map((line) => `+ ${line}`),
+      ];
+    });
+    if (blocks.length) return blocks.join("\n");
+  }
+  return null;
+}
+
+function renderApprovalCode(text: string): HTMLElement {
+  const pre = h("pre", { class: "approval-code" });
+  for (const line of text.split("\n")) {
+    const kind = line.startsWith("+") && !line.startsWith("+++")
+      ? "add"
+      : line.startsWith("-") && !line.startsWith("---")
+        ? "del"
+        : line.startsWith("@@")
+          ? "hunk"
+          : "ctx";
+    pre.append(h("span", { class: kind, text: line }), document.createTextNode("\n"));
+  }
+  return pre;
+}
+
+function buildApproval(actions: ViewActions, resize: () => void): ViewHost {
   const who = h("div");
   const code = h("div", { class: "code" });
+  const details = h("div", { class: "approval-details" });
   const row = h("div", { class: "actions" });
-  const el = h("div", { class: "view" }, card("amber", stack(116, 16, who, code, row)));
-  let rowKey = "";
+  const toggle = btn("Details", "secondary", () => {
+    State.approvalExpanded = !State.approvalExpanded;
+    State.notify();
+    resize();
+  });
+  const el = h(
+    "div",
+    { class: "view" },
+    card("amber", stack(116, 16, who, code, details, row)),
+  );
+  row.append(
+    toggle,
+    h("div", { class: "grow" }),
+    btn("Deny", "secondary", () => actions.decide("deny"), "N"),
+    btn("Allow", "primary", () => actions.decide("allow"), "Y"),
+  );
   return {
     el,
     sync() {
@@ -311,13 +374,29 @@ function buildApproval(actions: ViewActions): ViewHost {
       // Two buttons, built once. Rebuilding them between a mouse-down and a
       // mouse-up would swallow the click, and there is nothing left to vary:
       // "Always" is gone until the remembered-rules list exists to back it.
-      if (rowKey === "built") return;
-      rowKey = "built";
-      clear(row);
-      row.append(
-        btn("Deny", "secondary", () => actions.decide("deny"), "N"),
-        btn("Allow", "primary", () => actions.decide("allow"), "Y"),
-      );
+      const request = State.pendingApproval;
+      details.classList.toggle("open", State.approvalExpanded);
+      (toggle.querySelector("span") as HTMLElement).textContent = State.approvalExpanded
+        ? "Hide details"
+        : "Details";
+      if (!State.approvalExpanded || !request) {
+        clear(details);
+        return;
+      }
+
+      clear(details);
+      const meta = [
+        request.tool,
+        request.cwd ? `Working directory: ${request.cwd}` : "",
+        request.sessionId ? `Session: ${request.sessionId}` : "",
+      ].filter(Boolean).join("\n");
+      details.append(h("pre", { class: "approval-meta", text: meta }));
+      const preview = approvalChangePreview(request);
+      if (preview) details.append(renderApprovalCode(preview));
+      details.append(h("pre", {
+        class: "approval-json",
+        text: JSON.stringify(request.input, null, 2),
+      }));
     },
   };
 }
@@ -367,14 +446,50 @@ function buildError(actions: ViewActions): ViewHost {
 
 // ── Finished ──────────────────────────────────────────────────────────────────
 
-function buildFinished(actions: ViewActions): ViewHost {
+function buildFinished(actions: ViewActions, resize: () => void): ViewHost {
   const who = h("div");
   const title = h("div", { class: "title" });
+  const details = h("div", { class: "approval-details finished-details" });
+  const changes = btn("View changes", "secondary", () => void toggleChanges());
   const row = h("div", { class: "actions" },
     btn("Open terminal", "primary", () => actions.openTerminal()),
+    changes,
     btn("OK", "secondary", () => actions.collapse()),
   );
-  const el = h("div", { class: "view" }, card("green", stack(116, 16, who, title, row)));
+  const el = h(
+    "div",
+    { class: "view" },
+    card("green", stack(116, 16, who, title, details, row)),
+  );
+
+  async function toggleChanges() {
+    if (State.finishedExpanded) {
+      State.finishedExpanded = false;
+      State.notify();
+      resize();
+      return;
+    }
+    State.finishedExpanded = true;
+    clear(details);
+    details.append(h("div", { class: "sub", text: "Reading git diff…" }));
+    State.notify();
+    resize();
+    const cwd = State.focusTask?.sessionCwd ?? null;
+    try {
+      const diff = await Bridge.projectDiff(cwd);
+      if (!State.finishedExpanded) return;
+      clear(details);
+      details.append(renderApprovalCode(diff));
+    } catch (error) {
+      if (!State.finishedExpanded) return;
+      clear(details);
+      details.append(h("div", {
+        class: "sub",
+        text: String(error).replace(/^Error:\s*/, ""),
+      }));
+    }
+  }
+
   return {
     el,
     sync() {
@@ -383,6 +498,10 @@ function buildFinished(actions: ViewActions): ViewHost {
       const finishedBy = task?.source === "codex" ? "Codex finished" : "Claude Code finished";
       who.append(agentWho(task, finishedBy));
       title.textContent = task?.steps.at(-1) ?? "Session finished";
+      details.classList.toggle("open", State.finishedExpanded);
+      (changes.querySelector("span") as HTMLElement).textContent = State.finishedExpanded
+        ? "Hide changes"
+        : "View changes";
     },
   };
 }
@@ -507,10 +626,10 @@ export function buildViews(
   const map = new Map<IslandViewName, ViewHost>();
   map.set("overview", buildOverview(actions));
   map.set("empty", buildEmpty(actions));
-  map.set("approval", buildApproval(actions));
+  map.set("approval", buildApproval(actions, onChatHeightChange));
   map.set("question", buildQuestion());
   map.set("error", buildError(actions));
-  map.set("finished", buildFinished(actions));
+  map.set("finished", buildFinished(actions, onChatHeightChange));
   map.set("confused", buildConfused());
   map.set("note", buildNote());
   map.set("settings", buildSettings(actions));

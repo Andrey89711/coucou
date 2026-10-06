@@ -4,7 +4,7 @@
 
 # Coucou for Windows
 
-**Mochi doesn't get a notch on a PC — so it lives at the top of your screen instead.**
+**Mochi doesn't get a notch on a PC — so it keeps watch from the top of your screen instead.**
 
 Approve Claude Code or Codex permissions, watch your sessions work, drop a file, chat with Claude, and keep an eye on your services without leaving what you're doing.
 
