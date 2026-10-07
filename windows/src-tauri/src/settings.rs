@@ -29,6 +29,9 @@ pub struct Settings {
     /// OpenAI model used when the OpenAI chat provider is selected.
     #[serde(default = "default_openai_model")]
     pub openai_model: String,
+    /// Credential used by the OpenAI chat: "api_key" or "chatgpt".
+    #[serde(default = "default_openai_auth")]
+    pub openai_auth: String,
 }
 
 fn default_model() -> String {
@@ -41,6 +44,10 @@ fn default_chat_provider() -> String {
 
 fn default_openai_model() -> String {
     crate::openai::DEFAULT_MODEL.to_string()
+}
+
+fn default_openai_auth() -> String {
+    "api_key".to_string()
 }
 
 impl Default for Settings {
@@ -65,6 +72,7 @@ impl Default for Settings {
             model: default_model(),
             chat_provider: default_chat_provider(),
             openai_model: default_openai_model(),
+            openai_auth: default_openai_auth(),
         }
     }
 }

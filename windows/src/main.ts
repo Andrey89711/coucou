@@ -2,6 +2,7 @@
 
 import "./style.css";
 import { Bridge, IS_TAURI, onEvent } from "./core/bridge";
+import { initializeChatHistory } from "./core/chat-history";
 import { Sound } from "./core/sound";
 import { State, type Settings } from "./core/state";
 import { Island } from "./island/island";
@@ -20,6 +21,7 @@ async function main() {
   if (boot) {
     State.settings = { ...State.settings, ...boot.settings };
   }
+  await initializeChatHistory();
   island.applySettings();
   State.loadIntegrationTasks();
   if (boot && !boot.cursorPoll) island.followPageCursor();
@@ -55,13 +57,7 @@ async function main() {
 
   // The settings window writes preferences; apply them here without a restart.
   await onEvent<Settings>("settings-changed", (s) => {
-    const providerChanged = State.settings.chatProvider !== s.chatProvider;
     State.settings = { ...State.settings, ...s };
-    if (providerChanged) {
-      State.chatHistory = [];
-      State.noteMessage = null;
-      void Bridge.chatReset();
-    }
     island.applySettings();
     State.loadIntegrationTasks();
     void refreshConfigured();

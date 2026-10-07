@@ -37,6 +37,27 @@ export interface ChatMessage {
   content: string;
 }
 
+export interface ChatConversation {
+  id: string;
+  title: string;
+  provider: "claude" | "openai";
+  auth: "api_key" | "chatgpt";
+  model: string;
+  createdAt: number;
+  updatedAt: number;
+  messages: ChatMessage[];
+}
+
+export interface ChatSummary {
+  id: string;
+  title: string;
+  provider: "claude" | "openai";
+  auth: "api_key" | "chatgpt";
+  model: string;
+  updatedAt: number;
+  messageCount: number;
+}
+
 export type PromptContext =
   | { kind: "window"; appName: string; title: string; url?: string }
   | { kind: "file"; name: string; path?: string };
@@ -101,6 +122,8 @@ export interface Settings {
   chatProvider: "claude" | "openai";
   /** OpenAI model used by the chat. */
   openaiModel: string;
+  /** Whether OpenAI chat uses a separate API key or the connected ChatGPT plan. */
+  openaiAuth: "api_key" | "chatgpt";
 }
 
 export const DEFAULT_SETTINGS: Settings = {
@@ -119,6 +142,7 @@ export const DEFAULT_SETTINGS: Settings = {
   model: "claude-opus-5",
   chatProvider: "claude",
   openaiModel: "gpt-6.1-sol",
+  openaiAuth: "api_key",
 };
 
 type Listener = () => void;
@@ -149,6 +173,9 @@ class AppState {
   noteMessage: string | null = null;
   searchResult: SearchResult | null = null;
   chatHistory: ChatMessage[] = [];
+  activeConversation: ChatConversation | null = null;
+  conversations: ChatSummary[] = [];
+  chatHistoryOpen = false;
   chatExpanded = false;
   approvalExpanded = false;
   finishedExpanded = false;

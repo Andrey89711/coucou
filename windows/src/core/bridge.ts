@@ -5,7 +5,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
-import type { Settings } from "./state";
+import type { ChatConversation, ChatSummary, Settings } from "./state";
 
 export const IS_TAURI =
   typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
@@ -95,15 +95,26 @@ export const Bridge = {
 
   // ── Chat, files, secrets ──────────────────────────────────────────────────
   /** One chat turn. The API key and any file bytes never leave Rust. */
-  chatSend: (query: string, context: ChatContext | null) =>
-    callOrThrow<{ text: string }>("chat_send", { query, context }),
+  chatSend: (conversationId: string, query: string, context: ChatContext | null) =>
+    callOrThrow<ChatTurn>("chat_send", { conversationId, query, context }),
   chatReset: () => call<void>("chat_reset"),
+  chatHistoryList: () => callOrThrow<ChatSummary[]>("chat_history_list"),
+  chatHistoryCurrent: () => callOrThrow<ChatConversation | null>("chat_history_current"),
+  chatHistoryNew: () => callOrThrow<ChatConversation>("chat_history_new"),
+  chatHistoryOpen: (id: string) => callOrThrow<ChatConversation>("chat_history_open", { id }),
+  chatHistoryDelete: (id: string) =>
+    callOrThrow<ChatConversation | null>("chat_history_delete", { id }),
   /** Copies a dropped file into the inbox. */
   ingestFile: (path: string) => callOrThrow<DroppedFile>("ingest_file", { path }),
   /** Only ever tells you whether a key exists — never its value. */
   secretPresent: (key: string) => call<boolean>("secret_present", { key }),
   secretSet: (key: string, value: string) => callOrThrow<void>("secret_set", { key, value }),
   secretClear: (key: string) => callOrThrow<void>("secret_clear", { key }),
+  /** OAuth metadata only; access and refresh tokens remain in Rust/keyring. */
+  chatGptStatus: () => call<ChatGptStatus>("chatgpt_status"),
+  chatGptSignIn: () => callOrThrow<ChatGptStatus>("chatgpt_sign_in"),
+  chatGptSignOut: () => callOrThrow<void>("chatgpt_sign_out"),
+  chatGptModels: () => callOrThrow<ChatGptModel[]>("chatgpt_models"),
 
   // ── Integrations ──────────────────────────────────────────────────────────
   refreshIntegration: (id: string) => call<void>("refresh_integration", { id }),
@@ -144,6 +155,23 @@ export interface HookPreview {
   settingsPath: string;
   /** Hand back to hooksApply so only the reviewed diff is ever written. */
   fingerprint: string;
+}
+
+export interface ChatGptStatus {
+  connected: boolean;
+  sharing: boolean;
+  email: string | null;
+  name: string | null;
+}
+
+export interface ChatGptModel {
+  id: string;
+  label: string;
+}
+
+export interface ChatTurn {
+  text: string;
+  conversation: ChatConversation;
 }
 
 /** Same as `call`, but surfaces the error so the UI can show what went wrong. */

@@ -69,6 +69,54 @@ section > h2 {
   gap: 8px;
 }
 
+.agent-group {
+  border-color: color-mix(in srgb, var(--agent-color) 28%, transparent);
+  gap: 14px;
+}
+
+.agent-group-head,
+.agent-group-title {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+}
+
+.agent-group-title {
+  font-weight: 650;
+  font-size: 14px;
+}
+
+.group-dot {
+  background: var(--agent-color);
+  box-shadow: 0 0 12px color-mix(in srgb, var(--agent-color) 65%, transparent);
+}
+
+.agent-group-body,
+.connection-stack {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.agent-group-body {
+  transition: opacity 0.18s;
+}
+
+.agent-group-body.off {
+  opacity: 0.48;
+}
+
+.connection-card {
+  background: rgba(255, 255, 255, 0.025);
+  border-color: rgba(255, 255, 255, 0.075);
+  border-radius: 11px;
+  padding: 13px 14px;
+}
+
+.connection-stack > .connection-card {
+  background: rgba(0, 0, 0, 0.18);
+}
+
 .hint {
   font: 400 12px var(--font);
   color: var(--dim);

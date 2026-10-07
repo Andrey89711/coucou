@@ -3,12 +3,15 @@
 // integrations land here too in a later stage.
 
 import "./settings.css";
-import { Bridge, onEvent, type HookStatus } from "../core/bridge";
+import {
+  Bridge, onEvent, type ChatGptModel, type ChatGptStatus, type HookStatus,
+} from "../core/bridge";
 import { DEFAULT_SETTINGS, type Settings } from "../core/state";
 import { h, clear } from "../views/dom";
 
 let settings: Settings = { ...DEFAULT_SETTINGS };
 let version = "";
+const MAX_ACTIVE = 6;
 
 const root = document.getElementById("settings-root")!;
 
@@ -59,7 +62,7 @@ function hookSection(status: HookStatus, options: HookSectionOptions): HTMLEleme
   const body = h("div", { style: "display:flex;flex-direction:column;gap:12px" });
   const section = h(
     "section",
-    {},
+    { class: "connection-card" },
     h("h2", {}, statusDot(status.installed), h("span", { text: options.title })),
     body,
   );
@@ -284,8 +287,8 @@ function claudeApiSection(hasKey: boolean): HTMLElement {
 
   return h(
     "section",
-    {},
-    h("h2", {}, dot, h("span", { text: "Claude" })),
+    { class: "connection-card" },
+    h("h2", {}, dot, h("span", { text: "Anthropic API key" })),
     state,
     h("div", { class: "row" }, h("label", { text: "API key" }), field, saveBtn, clearBtn),
     h("div", { class: "row" }, h("label", { text: "Model" }), model),
@@ -303,10 +306,13 @@ const OPENAI_MODELS: [string, string][] = [
 
 function chatProviderSection(): HTMLElement {
   const provider = h("select", {}) as HTMLSelectElement;
+  provider.dataset.chatProvider = "true";
   provider.append(
-    h("option", { value: "claude", text: "Claude (Anthropic)" }),
-    h("option", { value: "openai", text: "OpenAI" }),
+    h("option", { value: "claude", text: "Claude Code / Anthropic" }),
+    h("option", { value: "openai", text: "Codex / OpenAI" }),
   );
+  provider.options[0].disabled = !settings.activeIntegrations.includes("integration_claude");
+  provider.options[1].disabled = !settings.activeIntegrations.includes("integration_codex");
   provider.value = settings.chatProvider;
   provider.addEventListener("change", () => {
     settings.chatProvider = provider.value as Settings["chatProvider"];
@@ -318,7 +324,7 @@ function chatProviderSection(): HTMLElement {
     h("h2", {}, h("span", { text: "Chat provider" })),
     h("div", {
       class: "hint",
-      text: "Choose which API answers messages in the island. Changing provider starts a new conversation.",
+      text: "Choose which enabled agent group answers messages in the island. Changing it starts a new conversation.",
     }),
     h("div", { class: "row" }, h("label", { text: "Provider" }), provider),
   );
@@ -377,26 +383,174 @@ function openAiApiSection(hasKey: boolean): HTMLElement {
     }
   });
 
-  const model = h("select", {}) as HTMLSelectElement;
-  for (const [id, label] of OPENAI_MODELS) model.append(h("option", { value: id, text: label }));
-  if (!OPENAI_MODELS.some(([id]) => id === settings.openaiModel)) {
-    model.append(h("option", { value: settings.openaiModel, text: settings.openaiModel }));
-  }
-  model.value = settings.openaiModel;
-  model.addEventListener("change", () => {
-    settings.openaiModel = model.value;
-    void save();
-  });
   clearBtn.style.display = hasKey ? "" : "none";
 
   return h(
     "section",
-    {},
-    h("h2", {}, dot, h("span", { text: "OpenAI API" })),
+    { class: "connection-card" },
+    h("h2", {}, dot, h("span", { text: "OpenAI API key" })),
     state,
     h("div", { class: "row" }, h("label", { text: "API key" }), field, saveBtn, clearBtn),
-    h("div", { class: "row" }, h("label", { text: "Model" }), model),
     feedback,
+  );
+}
+
+function chatGptSection(status: ChatGptStatus): HTMLElement {
+  const connected = status.connected && status.sharing;
+  const feedback = h("div", {});
+  const connect = h("button", {
+    class: "primary",
+    text: connected ? "Reconnect ChatGPT" : "Continue with ChatGPT",
+  });
+  connect.addEventListener("click", async () => {
+    connect.disabled = true;
+    clear(feedback);
+    feedback.append(h("div", {
+      class: "notice warn",
+      text: "Finish sign-in and plan permission in your browser…",
+    }));
+    try {
+      await Bridge.chatGptSignIn();
+      window.location.reload();
+    } catch (err) {
+      connect.disabled = false;
+      clear(feedback);
+      feedback.append(h("div", {
+        class: "notice err",
+        text: String(err).replace(/^Error:\s*/, ""),
+      }));
+    }
+  });
+
+  const actions = h("div", { class: "row" }, connect);
+  if (connected) {
+    actions.append(
+      h("button", {
+        text: "Manage usage",
+        onclick: () => void Bridge.openUrl("https://chatgpt.com/#settings/Usage"),
+      }),
+      h("button", {
+        class: "danger",
+        text: "Disconnect",
+        onclick: async () => {
+          await Bridge.chatGptSignOut();
+          window.location.reload();
+        },
+      }),
+    );
+  }
+  const identity = status.email ?? status.name;
+  return h(
+    "section",
+    { class: "connection-card" },
+    h("h2", {}, statusDot(connected), h("span", { text: "ChatGPT subscription" })),
+    h("div", {
+      class: "hint",
+      text: connected
+        ? `Connected${identity ? ` as ${identity}` : ""}. Eligible usage uses your ChatGPT plan.`
+        : "Use your ChatGPT plan for eligible chat requests without an API key.",
+    }),
+    actions,
+    feedback,
+  );
+}
+
+function codexChatSection(
+  hasKey: boolean,
+  chatGpt: ChatGptStatus,
+  planModels: ChatGptModel[],
+): HTMLElement {
+  const method = h("select", {}) as HTMLSelectElement;
+  method.append(
+    h("option", { value: "chatgpt", text: "ChatGPT subscription" }),
+    h("option", { value: "api_key", text: "OpenAI API key" }),
+  );
+  method.value = settings.openaiAuth;
+
+  const connection = h("div", { class: "connection-stack" });
+  const model = h("select", {}) as HTMLSelectElement;
+  const drawConnection = () => {
+    clear(connection);
+    connection.append(settings.openaiAuth === "chatgpt"
+      ? chatGptSection(chatGpt)
+      : openAiApiSection(hasKey));
+    clear(model);
+    const choices: [string, string][] = settings.openaiAuth === "chatgpt" && planModels.length
+      ? planModels.map(({ id, label }) => [id, label])
+      : OPENAI_MODELS;
+    for (const [id, label] of choices) {
+      model.append(h("option", { value: id, text: label }));
+    }
+    if (!choices.some(([id]) => id === settings.openaiModel)) {
+      model.append(h("option", { value: settings.openaiModel, text: settings.openaiModel }));
+    }
+    model.value = settings.openaiModel;
+  };
+  method.addEventListener("change", () => {
+    settings.openaiAuth = method.value as Settings["openaiAuth"];
+    drawConnection();
+    void save();
+  });
+  model.addEventListener("change", () => {
+    settings.openaiModel = model.value;
+    void save();
+  });
+  drawConnection();
+
+  return h(
+    "section",
+    { class: "connection-card" },
+    h("h2", {}, h("span", { text: "Island chat" })),
+    h("div", { class: "row" }, h("label", { text: "Connection" }), method),
+    connection,
+    h("div", { class: "row" }, h("label", { text: "Model" }), model),
+  );
+}
+
+function agentGroup(
+  id: "integration_claude" | "integration_codex",
+  title: string,
+  color: string,
+  children: HTMLElement[],
+): HTMLElement {
+  const active = settings.activeIntegrations.includes(id);
+  const body = h("div", { class: active ? "agent-group-body" : "agent-group-body off" }, ...children);
+  const stateLabel = h("span", { class: "hint", text: active ? "Enabled" : "Disabled" });
+  const sw = toggle(active, (on) => {
+    if (on) {
+      settings.activeIntegrations = [...settings.activeIntegrations, id];
+    } else {
+      settings.activeIntegrations = settings.activeIntegrations.filter((value) => value !== id);
+      const fallback = id === "integration_codex" ? "integration_claude" : "integration_codex";
+      const thisProvider = id === "integration_codex" ? "openai" : "claude";
+      if (settings.chatProvider === thisProvider && settings.activeIntegrations.includes(fallback)) {
+        settings.chatProvider = fallback === "integration_codex" ? "openai" : "claude";
+      }
+    }
+    body.classList.toggle("off", !on);
+    stateLabel.textContent = on ? "Enabled" : "Disabled";
+    const provider = document.querySelector<HTMLSelectElement>("select[data-chat-provider]");
+    if (provider) {
+      provider.value = settings.chatProvider;
+      provider.options[0].disabled = !settings.activeIntegrations.includes("integration_claude");
+      provider.options[1].disabled = !settings.activeIntegrations.includes("integration_codex");
+    }
+    void save();
+  });
+  return h(
+    "section",
+    { class: "agent-group", style: `--agent-color:${color}` },
+    h("div", { class: "agent-group-head" },
+      h("div", { class: "agent-group-title" }, h("i", { class: "dot group-dot" }), h("span", { text: title })),
+      h("span", { class: "spacer" }),
+      stateLabel,
+      sw,
+    ),
+    h("div", {
+      class: "hint",
+      text: `Connections for ${title}. Turning the group off keeps its credentials and hook files.`,
+    }),
+    body,
   );
 }
 
@@ -410,10 +564,6 @@ interface IntegrationDef {
 }
 
 const INTEGRATIONS: IntegrationDef[] = [
-  { id: "integration_claude", name: "Claude Code", color: "#F5F6F8",
-    description: "Show Claude Code sessions and approval requests from VS Code.", fields: [] },
-  { id: "integration_codex", name: "Codex", color: "#C96AF2",
-    description: "Show Codex sessions and approval requests from VS Code.", fields: [] },
   { id: "integration_stripe", name: "Stripe", color: "#0570DE",
     fields: [{ key: "stripe-api-key", label: "Secret key", placeholder: "sk_live_…", secret: true }] },
   { id: "integration_github", name: "GitHub", color: "#F4505E",
@@ -432,8 +582,6 @@ const INTEGRATIONS: IntegrationDef[] = [
   { id: "integration_calcom", name: "Cal.com", color: "#C9956A",
     fields: [{ key: "calcom-api-key", label: "API key", placeholder: "cal_…", secret: true }] },
 ];
-
-const MAX_ACTIVE = 6;
 
 function integrationsSection(present: Record<string, boolean>): HTMLElement {
   const note = h("div", { class: "hint" });
@@ -586,6 +734,17 @@ async function main() {
 
   const hasClaudeKey = (await Bridge.secretPresent("anthropic-api-key")) ?? false;
   const hasOpenAiKey = (await Bridge.secretPresent("openai-api-key")) ?? false;
+  const chatGpt = (await Bridge.chatGptStatus()) ?? {
+    connected: false, sharing: false, email: null, name: null,
+  };
+  let chatGptModels: ChatGptModel[] = [];
+  if (chatGpt.connected && chatGpt.sharing) {
+    try {
+      chatGptModels = await Bridge.chatGptModels();
+    } catch {
+      // Keep the saved model visible; reconnect/usage errors surface on send.
+    }
+  }
 
   const keys = [
     "stripe-api-key", "github-token", "vercel-token",
@@ -597,11 +756,15 @@ async function main() {
   clear(root);
   root.append(
     h("h1", {}, h("span", { text: "Coucou" }), h("span", { class: "version", text: version })),
-    claudeSection(status),
-    codexSection(codexStatus),
     chatProviderSection(),
-    claudeApiSection(hasClaudeKey),
-    openAiApiSection(hasOpenAiKey),
+    agentGroup("integration_codex", "Codex", "#C96AF2", [
+      codexSection(codexStatus),
+      codexChatSection(hasOpenAiKey, chatGpt, chatGptModels),
+    ]),
+    agentGroup("integration_claude", "Claude Code", "#F5F6F8", [
+      claudeSection(status),
+      claudeApiSection(hasClaudeKey),
+    ]),
     integrationsSection(present),
     generalSection(),
     h("div", {

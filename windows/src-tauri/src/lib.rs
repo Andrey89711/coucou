@@ -1,5 +1,7 @@
 // Coucou for Windows — app wiring and the commands the island calls.
 
+mod chat_history;
+mod chatgpt;
 mod claude;
 mod files;
 mod hooks;
@@ -19,13 +21,14 @@ use std::sync::{Arc, Mutex};
 
 use serde::Serialize;
 use tauri::{AppHandle, Emitter, Manager, State, WebviewUrl, WebviewWindowBuilder};
-use tauri_plugin_autostart::{ManagerExt, MacosLauncher};
+use tauri_plugin_autostart::{MacosLauncher, ManagerExt};
 
+use chat_history::{ChatHistory, ChatSummary, ChatTurn, ChatView};
 use claude::{Chat, ChatContext, ChatReply};
-use openai::OpenAiChat;
 use files::DroppedFile;
 use hooks::{HookPreview, HookStatus};
 use island::{PollGate, ScreenInfo};
+use openai::OpenAiChat;
 use pipe::Pending;
 use settings::Settings;
 
@@ -75,7 +78,11 @@ fn save_settings(app: AppHandle, shared: State<Shared>, settings: Settings) {
     }
     if autostart_changed {
         let manager = app.autolaunch();
-        let result = if settings.autostart { manager.enable() } else { manager.disable() };
+        let result = if settings.autostart {
+            manager.enable()
+        } else {
+            manager.disable()
+        };
         if let Err(err) = result {
             eprintln!("[coucou] autostart: {err}");
         }
@@ -103,7 +110,12 @@ fn set_collapsed(app: AppHandle, shared: State<Shared>, collapsed: bool) {
 /// The front end pushes the island shape; Rust decides click-through from it.
 #[tauri::command]
 fn set_island_rect(app: AppHandle, shared: State<Shared>, x: f64, y: f64, width: f64, height: f64) {
-    shared.gate.set_rect(island::IslandRect { x, y, w: width, h: height });
+    shared.gate.set_rect(island::IslandRect {
+        x,
+        y,
+        w: width,
+        h: height,
+    });
     // Without the cursor poll the input region is the click-through: it follows the island.
     if !platform::CURSOR_POLL {
         island::refresh_click_through(&app, &shared.gate);
@@ -112,7 +124,9 @@ fn set_island_rect(app: AppHandle, shared: State<Shared>, x: f64, y: f64, width:
 
 #[tauri::command]
 fn focus_window(app: AppHandle, focused: bool) {
-    let Some(win) = island::window(&app) else { return };
+    let Some(win) = island::window(&app) else {
+        return;
+    };
     platform::set_activating(&win, focused);
     if focused {
         let _ = win.set_focus();
@@ -231,7 +245,11 @@ fn project_diff(path: Option<String>) -> Result<String, String> {
         return Err("The session working directory no longer exists.".into());
     }
     let root = resolve_git_root(&dir)
-        .or_else(|| std::env::current_dir().ok().and_then(|cwd| resolve_git_root(&cwd)))
+        .or_else(|| {
+            std::env::current_dir()
+                .ok()
+                .and_then(|cwd| resolve_git_root(&cwd))
+        })
         .ok_or_else(|| {
             format!(
                 "No Git repository was found in or directly below {}.",
@@ -240,10 +258,14 @@ fn project_diff(path: Option<String>) -> Result<String, String> {
         })?;
 
     let mut command = Command::new("git");
-    command
-        .arg("-C")
-        .arg(&root)
-        .args(["diff", "--no-ext-diff", "--no-color", "--unified=3", "HEAD", "--"]);
+    command.arg("-C").arg(&root).args([
+        "diff",
+        "--no-ext-diff",
+        "--no-color",
+        "--unified=3",
+        "HEAD",
+        "--",
+    ]);
     let output = platform::no_console(&mut command)
         .output()
         .map_err(|e| format!("Could not run git: {e}"))?;
@@ -372,27 +394,121 @@ async fn chat_send(
     shared: State<'_, Shared>,
     chat: State<'_, Chat>,
     openai_chat: State<'_, OpenAiChat>,
+    history: State<'_, ChatHistory>,
+    conversation_id: String,
     query: String,
     context: Option<ChatContext>,
-) -> Result<ChatReply, String> {
-    let (provider, claude_model, openai_model) = {
+) -> Result<ChatTurn, String> {
+    let config = history.config(&conversation_id)?;
+    let active_integrations = {
         let settings = shared.settings.lock().unwrap();
-        (
-            settings.chat_provider.clone(),
-            settings.model.clone(),
-            settings.openai_model.clone(),
-        )
+        settings.active_integrations.clone()
     };
-    match provider.as_str() {
-        "openai" => openai::send(&openai_chat, &openai_model, query, context).await,
-        _ => claude::send(&chat, &claude_model, query, context).await,
-    }
+    let reply: ChatReply = match config.provider.as_str() {
+        "openai" => {
+            if !active_integrations
+                .iter()
+                .any(|id| id == "integration_codex")
+            {
+                return Err("The Codex group is disabled in Settings.".into());
+            }
+            openai::send(
+                &openai_chat,
+                &config.model,
+                &config.auth,
+                query.clone(),
+                context,
+            )
+            .await?
+        }
+        _ => {
+            if !active_integrations
+                .iter()
+                .any(|id| id == "integration_claude")
+            {
+                return Err("The Claude Code group is disabled in Settings.".into());
+            }
+            claude::send(&chat, &config.model, query.clone(), context).await?
+        }
+    };
+    let backend_messages = if config.provider == "openai" {
+        openai_chat.snapshot()
+    } else {
+        chat.snapshot()
+    };
+    let conversation = history.commit_turn(
+        &conversation_id,
+        query,
+        reply.text.clone(),
+        backend_messages,
+    )?;
+    Ok(ChatTurn {
+        text: reply.text,
+        conversation,
+    })
 }
 
 #[tauri::command]
 fn chat_reset(chat: State<Chat>, openai_chat: State<OpenAiChat>) {
     chat.reset();
     openai_chat.reset();
+}
+
+#[tauri::command]
+fn chat_history_list(history: State<ChatHistory>) -> Vec<ChatSummary> {
+    history.list()
+}
+
+#[tauri::command]
+fn chat_history_current(
+    history: State<ChatHistory>,
+    chat: State<Chat>,
+    openai_chat: State<OpenAiChat>,
+) -> Result<Option<ChatView>, String> {
+    history.current(&chat, &openai_chat)
+}
+
+#[tauri::command]
+fn chat_history_new(
+    shared: State<Shared>,
+    history: State<ChatHistory>,
+    chat: State<Chat>,
+    openai_chat: State<OpenAiChat>,
+) -> Result<ChatView, String> {
+    let (provider, auth, model) = {
+        let settings = shared.settings.lock().unwrap();
+        let model = if settings.chat_provider == "openai" {
+            settings.openai_model.clone()
+        } else {
+            settings.model.clone()
+        };
+        (
+            settings.chat_provider.clone(),
+            settings.openai_auth.clone(),
+            model,
+        )
+    };
+    history.create(provider, auth, model, &chat, &openai_chat)
+}
+
+#[tauri::command]
+fn chat_history_open(
+    history: State<ChatHistory>,
+    chat: State<Chat>,
+    openai_chat: State<OpenAiChat>,
+    id: String,
+) -> Result<ChatView, String> {
+    history.open(&id, &chat, &openai_chat)
+}
+
+#[tauri::command]
+fn chat_history_delete(
+    history: State<ChatHistory>,
+    chat: State<Chat>,
+    openai_chat: State<OpenAiChat>,
+    id: String,
+) -> Result<Option<ChatView>, String> {
+    history.delete(&id, &chat, &openai_chat)
 }
 
 /// Copies a dropped file into the inbox and reports its name back.
@@ -415,6 +531,26 @@ fn secret_set(key: String, value: String) -> Result<(), String> {
 #[tauri::command]
 fn secret_clear(key: String) -> Result<(), String> {
     secrets::clear(&key)
+}
+
+#[tauri::command]
+fn chatgpt_status() -> chatgpt::ChatGptStatus {
+    chatgpt::status()
+}
+
+#[tauri::command]
+async fn chatgpt_sign_in() -> Result<chatgpt::ChatGptStatus, String> {
+    chatgpt::sign_in().await
+}
+
+#[tauri::command]
+fn chatgpt_sign_out() -> Result<(), String> {
+    chatgpt::sign_out()
+}
+
+#[tauri::command]
+async fn chatgpt_models() -> Result<Vec<chatgpt::ChatGptModel>, String> {
+    chatgpt::models().await
 }
 
 /// Opens the configured n8n instance — the URL lives in the Credential Manager.
@@ -512,7 +648,10 @@ pub fn run() {
         .plugin(tauri_plugin_single_instance::init(|app, _argv, _cwd| {
             let _ = app.emit_to(island::WINDOW_LABEL, "tray", "open".to_string());
         }))
-        .plugin(tauri_plugin_autostart::init(MacosLauncher::LaunchAgent, None))
+        .plugin(tauri_plugin_autostart::init(
+            MacosLauncher::LaunchAgent,
+            None,
+        ))
         .manage(Shared {
             settings: Mutex::new(loaded.clone()),
             gate: gate.clone(),
@@ -520,6 +659,7 @@ pub fn run() {
         .manage(Pending::default())
         .manage(Chat::default())
         .manage(OpenAiChat::default())
+        .manage(ChatHistory::load())
         .invoke_handler(tauri::generate_handler![
             boot,
             save_settings,
@@ -544,10 +684,19 @@ pub fn run() {
             log_line,
             chat_send,
             chat_reset,
+            chat_history_list,
+            chat_history_current,
+            chat_history_new,
+            chat_history_open,
+            chat_history_delete,
             ingest_file,
             secret_present,
             secret_set,
             secret_clear,
+            chatgpt_status,
+            chatgpt_sign_in,
+            chatgpt_sign_out,
+            chatgpt_models,
             refresh_integration,
             open_n8n,
             open_settings_window,
@@ -573,7 +722,10 @@ pub fn run() {
             gate.set_active(true);
             island::spawn_cursor_poll(handle.clone(), gate.clone());
 
-            log::line(format!("--- Coucou {} started ---", env!("CARGO_PKG_VERSION")));
+            log::line(format!(
+                "--- Coucou {} started ---",
+                env!("CARGO_PKG_VERSION")
+            ));
             hooks::ensure_hook_exe(&handle);
             pipe::start(handle.clone());
             integrations::start(handle.clone());
