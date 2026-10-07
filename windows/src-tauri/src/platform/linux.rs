@@ -136,8 +136,16 @@ pub fn reveal_folder(path: &str) {
 
 /// Opens the first available terminal emulator in the requested directory.
 pub fn open_terminal(path: &Path) -> bool {
-    for terminal in ["x-terminal-emulator", "kgx", "gnome-terminal", "konsole", "xfce4-terminal"] {
-        let Some(exe) = find_on_path(terminal) else { continue };
+    for terminal in [
+        "x-terminal-emulator",
+        "kgx",
+        "gnome-terminal",
+        "konsole",
+        "xfce4-terminal",
+    ] {
+        let Some(exe) = find_on_path(terminal) else {
+            continue;
+        };
         if Command::new(exe).current_dir(path).spawn().is_ok() {
             return true;
         }
@@ -222,7 +230,9 @@ pub fn unblock_webview_drops(_app: &AppHandle) {}
 pub fn make_non_activating(win: &WebviewWindow) {
     let Ok(gw) = win.gtk_window() else { return };
     // COUCOU_LAYER_SHELL=0 is the way out on a compositor where it misbehaves.
-    let wanted = std::env::var("COUCOU_LAYER_SHELL").map(|v| v != "0").unwrap_or(true);
+    let wanted = std::env::var("COUCOU_LAYER_SHELL")
+        .map(|v| v != "0")
+        .unwrap_or(true);
     let supported = unsafe { layer::gtk_layer_is_supported() } != 0;
     if !wanted || !supported || gw.is_realized() {
         let why = if !wanted {
@@ -282,7 +292,11 @@ pub fn set_activating(win: &WebviewWindow, activating: bool) {
     // refuses focus until we say otherwise — on a layer surface too.
     gw.set_accept_focus(activating);
     if LAYER_SURFACE.load(Ordering::Relaxed) {
-        let mode = if activating { layer::KEYBOARD_ON_DEMAND } else { layer::KEYBOARD_NONE };
+        let mode = if activating {
+            layer::KEYBOARD_ON_DEMAND
+        } else {
+            layer::KEYBOARD_NONE
+        };
         unsafe { layer::gtk_layer_set_keyboard_mode(gtk_window_ptr(&gw), mode) };
     }
 }
@@ -299,7 +313,9 @@ fn apply_input_region(gw: &impl IsA<gtk::Widget>, rect: Region) {
     match rect {
         None => gw.input_shape_combine_region(None),
         Some((x, y, w, h)) => {
-            let Some(gdk_window) = gw.window() else { return };
+            let Some(gdk_window) = gw.window() else {
+                return;
+            };
             let region = gtk::cairo::Region::create_rectangle(&gtk::cairo::RectangleInt::new(
                 x.floor() as i32,
                 y.floor() as i32,
@@ -321,7 +337,8 @@ mod tests {
         let _ = std::fs::remove_dir_all(&base);
         let dir = base.join("runtime");
         std::fs::create_dir_all(&dir).unwrap();
-        let set = |mode| std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(mode)).unwrap();
+        let set =
+            |mode| std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(mode)).unwrap();
 
         set(0o700);
         assert!(is_private_dir(&dir));
