@@ -10,6 +10,9 @@ pub struct Settings {
     pub sound_enabled: bool,
     pub sound_volume: f64,
     pub auto_close_interval: f64,
+    /// Whether the compact mini header retracts completely after one minute.
+    #[serde(default = "default_auto_hide")]
+    pub auto_hide: bool,
     pub absence_interval: f64,
     pub active_integrations: Vec<String>,
     /// Schema marker for one-time integration-list migrations.
@@ -38,6 +41,10 @@ fn default_model() -> String {
     crate::claude::DEFAULT_MODEL.to_string()
 }
 
+fn default_auto_hide() -> bool {
+    true
+}
+
 fn default_chat_provider() -> String {
     "claude".to_string()
 }
@@ -56,6 +63,7 @@ impl Default for Settings {
             sound_enabled: true,
             sound_volume: 0.12,
             auto_close_interval: 15.0,
+            auto_hide: true,
             absence_interval: 180.0,
             active_integrations: vec![
                 "integration_claude".into(),

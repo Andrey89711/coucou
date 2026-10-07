@@ -901,6 +901,13 @@ export class Island {
     Sound.setEnabled(State.settings.soundEnabled);
     Sound.setVolume(State.settings.soundVolume);
     this.fsm.homeToPetitDelay = State.settings.autoCloseInterval;
+    const wasAutoHide = this.fsm.autoHide;
+    this.fsm.autoHide = State.settings.autoHide;
+    if (!this.fsm.autoHide && this.fsm.state === "hidden" && !State.paused) {
+      this.fsm.forcePetit();
+    } else if (this.fsm.autoHide && !wasAutoHide && this.fsm.state === "petit" && !this.wasInIsland) {
+      this.fsm.mouseLeft();
+    }
     State.notify();
   }
 

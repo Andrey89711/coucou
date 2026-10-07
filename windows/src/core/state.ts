@@ -110,6 +110,8 @@ export interface Settings {
   soundEnabled: boolean;
   soundVolume: number;
   autoCloseInterval: number;
+  /** Whether the compact mini header retracts completely while idle. */
+  autoHide: boolean;
   absenceInterval: number;
   activeIntegrations: string[];
   integrationsVersion: number;
@@ -130,6 +132,7 @@ export const DEFAULT_SETTINGS: Settings = {
   soundEnabled: true,
   soundVolume: 0.12,
   autoCloseInterval: 15,
+  autoHide: true,
   absenceInterval: 180,
   activeIntegrations: [
     "integration_claude", "integration_codex",

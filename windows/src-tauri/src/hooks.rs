@@ -11,10 +11,10 @@
 
 use std::path::{Path, PathBuf};
 
+use crate::{platform, settings};
 use serde::Serialize;
 use serde_json::{json, Map, Value};
 use tauri::{AppHandle, Manager};
-use crate::{platform, settings};
 
 /// Every event the island reacts to, with the hook timeout written to settings.json.
 /// PermissionRequest waits for a human, so it gets the decision timeout + 10 s.
@@ -139,7 +139,9 @@ fn read_codex_settings_lossy() -> Value {
 
 #[cfg(windows)]
 fn hook_command(event: &str) -> String {
-    let exe = settings::hook_exe_path().to_string_lossy().replace('\\', "/");
+    let exe = settings::hook_exe_path()
+        .to_string_lossy()
+        .replace('\\', "/");
     format!("\"{exe}\" {event}")
 }
 
@@ -158,7 +160,9 @@ fn codex_hook_command() -> String {
 /// and apostrophes in the user's profile path.
 #[cfg(windows)]
 fn codex_hook_command_windows() -> String {
-    let exe = settings::hook_exe_path().to_string_lossy().replace('\'', "''");
+    let exe = settings::hook_exe_path()
+        .to_string_lossy()
+        .replace('\'', "''");
     let script = format!("& '{exe}' --agent codex; exit $LASTEXITCODE");
     let utf16le: Vec<u8> = script.encode_utf16().flat_map(u16::to_le_bytes).collect();
     let encoded = crate::claude::base64_for(&utf16le);
@@ -170,7 +174,10 @@ fn codex_hook_command_windows() -> String {
 /// the home directory is called.
 #[cfg(unix)]
 fn hook_command(event: &str) -> String {
-    format!("{} {event}", sh_quote(&settings::hook_exe_path().to_string_lossy()))
+    format!(
+        "{} {event}",
+        sh_quote(&settings::hook_exe_path().to_string_lossy())
+    )
 }
 
 #[cfg(unix)]
@@ -258,8 +265,7 @@ fn without_ours(existing: &Value) -> Value {
     for (event, value) in hooks {
         match value.as_array() {
             Some(list) => {
-                let kept: Vec<Value> =
-                    list.iter().filter(|e| !entry_is_ours(e)).cloned().collect();
+                let kept: Vec<Value> = list.iter().filter(|e| !entry_is_ours(e)).cloned().collect();
                 if !kept.is_empty() {
                     out.insert(event, Value::Array(kept));
                 }
@@ -433,7 +439,11 @@ pub fn status() -> HookStatus {
 
 pub fn preview(install: bool) -> Result<HookPreview, String> {
     let current = read_settings()?;
-    let next = if install { merged(&current) } else { without_ours(&current) };
+    let next = if install {
+        merged(&current)
+    } else {
+        without_ours(&current)
+    };
     Ok(HookPreview {
         diff: unified_diff(&pretty(&current), &pretty(&next)),
         backup: backup_path().to_string_lossy().to_string(),
@@ -506,7 +516,11 @@ pub fn write(install: bool, fingerprint: &str) -> Result<String, String> {
         std::fs::copy(&path, &backup).map_err(|e| format!("backup failed: {e}"))?;
     }
 
-    let next = if install { merged(&current) } else { without_ours(&current) };
+    let next = if install {
+        merged(&current)
+    } else {
+        without_ours(&current)
+    };
     let mut text = pretty(&next);
     text.push('\n');
 
@@ -609,7 +623,10 @@ pub fn ensure_hook_exe(app: &AppHandle) {
     }
 
     let mut candidates: Vec<PathBuf> = Vec::new();
-    if let Ok(p) = app.path().resolve(platform::HOOK_EXE, tauri::path::BaseDirectory::Resource) {
+    if let Ok(p) = app
+        .path()
+        .resolve(platform::HOOK_EXE, tauri::path::BaseDirectory::Resource)
+    {
         candidates.push(p);
     }
     if let Ok(exe) = std::env::current_exe() {
@@ -780,8 +797,14 @@ mod tests {
     #[test]
     fn empty_and_whitespace_files_start_from_nothing() {
         assert_eq!(parse_settings(b"", WHERE).unwrap(), json!({}));
-        assert_eq!(parse_settings(b"  
-	 ", WHERE).unwrap(), json!({}));
+        assert_eq!(
+            parse_settings(
+                b"  
+	 ", WHERE
+            )
+            .unwrap(),
+            json!({})
+        );
     }
 
     #[test]
@@ -807,7 +830,9 @@ mod tests {
 
         let pre = after["hooks"]["PreToolUse"].as_array().unwrap();
         assert!(
-            pre.iter().any(|e| serde_json::to_string(e).unwrap().contains("someone-elses-tool.exe")),
+            pre.iter().any(|e| serde_json::to_string(e)
+                .unwrap()
+                .contains("someone-elses-tool.exe")),
             "another tool's hook was dropped"
         );
         assert!(pre.iter().any(entry_is_ours), "our own hook was not added");
@@ -831,7 +856,9 @@ mod tests {
 
         let after = merged_codex(&existing).unwrap();
         let pre = after["hooks"]["PreToolUse"].as_array().unwrap();
-        assert!(pre.iter().any(|e| serde_json::to_string(e).unwrap().contains("my-policy.exe")));
+        assert!(pre
+            .iter()
+            .any(|e| serde_json::to_string(e).unwrap().contains("my-policy.exe")));
         assert!(pre.iter().any(entry_is_codex_ours));
         assert_eq!(
             after["hooks"]["PermissionRequest"][0]["hooks"][0]["statusMessage"],
@@ -842,7 +869,9 @@ mod tests {
             let command = after["hooks"]["SessionStart"][0]["hooks"][0]["commandWindows"]
                 .as_str()
                 .unwrap();
-            assert!(command.starts_with("powershell.exe -NoProfile -NonInteractive -EncodedCommand "));
+            assert!(
+                command.starts_with("powershell.exe -NoProfile -NonInteractive -EncodedCommand ")
+            );
             assert!(!command.contains('\''));
             assert!(!command.contains('"'));
         }
@@ -908,7 +937,10 @@ mod tests {
         std::env::set_var(platform::HOME_VAR, &tmp);
 
         let path = settings_path();
-        assert!(path.starts_with(&tmp), "the test must not touch the real home");
+        assert!(
+            path.starts_with(&tmp),
+            "the test must not touch the real home"
+        );
 
         // A real-shaped file, written the way PowerShell 5 would: UTF-8 with BOM.
         let original = r#"{"model":"claude-opus-5","theme":"dark","tui":{"x":1},"hooks":{"PreToolUse":[{"hooks":[{"type":"command","command":"other-tool.exe"}]}]}}"#;
@@ -918,7 +950,10 @@ mod tests {
 
         // Install.
         let plan = preview(true).expect("a BOM must not stop the preview");
-        assert!(plan.diff.contains("coucou-hook"), "the diff must show what changes");
+        assert!(
+            plan.diff.contains("coucou-hook"),
+            "the diff must show what changes"
+        );
         let backup = write(true, &plan.fingerprint).expect("install should succeed");
 
         // The backup holds the original bytes, BOM and all.
@@ -930,7 +965,9 @@ mod tests {
         assert_eq!(after["theme"], "dark");
         assert_eq!(after["tui"]["x"], 1);
         let pre = after["hooks"]["PreToolUse"].as_array().unwrap();
-        assert!(pre.iter().any(|e| serde_json::to_string(e).unwrap().contains("other-tool.exe")));
+        assert!(pre
+            .iter()
+            .any(|e| serde_json::to_string(e).unwrap().contains("other-tool.exe")));
         assert!(status().installed);
 
         // A file that moved since the preview is refused, and left alone.

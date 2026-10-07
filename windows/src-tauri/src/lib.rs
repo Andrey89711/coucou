@@ -76,6 +76,7 @@ fn save_settings(app: AppHandle, shared: State<Shared>, settings: Settings) {
     if let Err(err) = settings::save(&settings) {
         eprintln!("[coucou] could not save settings: {err}");
     }
+    tray::sync_auto_hide(&app, settings.auto_hide);
     if autostart_changed {
         let manager = app.autolaunch();
         let result = if settings.autostart {
